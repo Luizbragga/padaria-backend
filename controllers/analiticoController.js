@@ -503,7 +503,6 @@ exports.listarEntregasDoDia = async (req, res) => {
     });
   }
 };
-// ====== CONTROLLER (controllers/analiticoController.js) ======
 
 exports.obterLocalizacaoEntregadores = async (req, res) => {
   try {
@@ -653,7 +652,7 @@ exports.pagamentosDetalhados = async (req, res) => {
     const { dataInicial, dataFinal, forma } = req.query;
 
     const filtros = {
-      "pagamentos.0": { $exists: true }, // entregas com pagamentos
+      "pagamentos.0": { $exists: true },
       padaria: req.usuario.padaria,
     };
 
@@ -688,6 +687,7 @@ exports.pagamentosDetalhados = async (req, res) => {
         if (forma && forma !== "todas" && formaDoPagamento !== forma) return;
 
         pagamentos.push({
+          _id: pagamento._id, // 🔹 Aqui
           cliente: entrega.cliente,
           entregador: entrega.entregador?.nome || "Desconhecido",
           valor: pagamento.valor,
