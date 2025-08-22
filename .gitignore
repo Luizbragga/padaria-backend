@@ -1,0 +1,7 @@
+
+# Local env, logs e caches
+.env
+logs/
+*.log
+**/yarn-error.log
+node_modules/
