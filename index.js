@@ -19,23 +19,35 @@ cron.schedule("0 0 * * *", () => {
 logger.info("Servidor iniciado");
 logger.error("Teste de erro");
 
-app.use(cors());
+// -------- CORS (Express 5, sem app.options) --------
+const corsOptions = {
+  origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: false, // você guarda tokens no localStorage, não usa cookies
+  maxAge: 600,
+};
+app.use(cors(corsOptions));
+// responde a qualquer preflight logo aqui
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+// ---------------------------------------------------
+
 app.use(morgan("dev"));
 app.use(helmet());
-app.use(express.json()); // ← Isso é ESSENCIAL para POST e PUT com JSON
+app.use(express.json()); // ESSENCIAL p/ POST/PUT JSON
 
+// 3) Só depois o rate limit
 const rateLimit = require("express-rate-limit");
-
-// Limite: 100 requisições por IP a cada 15 minutos
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 1000, // Limite por IP
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
   message: {
     erro: "Muitas requisições vindas deste IP. Tente novamente mais tarde.",
   },
 });
-
-// Aplica o limitador a todas as rotas
 app.use(limiter);
 
 const conectarBanco = require("./config/database");
