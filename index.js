@@ -101,3 +101,6 @@ app.use("/entregas-avulsas", entregasAvulsasRoutes);
 
 const produtosRoutes = require("./routes/produtos");
 app.use("/produtos", produtosRoutes);
+
+const rotasRoutes = require("./routes/rotas");
+app.use("/rotas", rotasRoutes);
