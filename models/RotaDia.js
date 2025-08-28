@@ -1,3 +1,4 @@
+// models/RotaDia.js
 const mongoose = require("mongoose");
 
 const RotaDiaSchema = new mongoose.Schema(
@@ -17,7 +18,7 @@ const RotaDiaSchema = new mongoose.Schema(
     entregador: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Usuario",
-      default: null, // <-- antes era required: true
+      default: null, // <-- não obrigatório
     },
 
     // batimento para detectar inatividade (para “reassumir” após X min)
@@ -39,14 +40,28 @@ const RotaDiaSchema = new mongoose.Schema(
       default: "livre",
     },
 
-    // seus campos existentes – mantidos
+    // campos auxiliares
     claimedAt: { type: Date, default: Date.now },
     encerradaEm: { type: Date },
   },
   { timestamps: true }
 );
 
-// uma (padaria, data, rota) só pode existir uma vez
+// 🔒 Garante que uma mesma padaria só tenha 1 rota por dia com mesmo nome
 RotaDiaSchema.index({ padaria: 1, data: 1, rota: 1 }, { unique: true });
+
+// 🔄 Middleware: mantém coerência entre entregador e status
+RotaDiaSchema.pre("save", function (next) {
+  if (this.entregador && this.status === "livre") {
+    this.status = "ocupada";
+  }
+  if (!this.entregador && this.status === "ocupada") {
+    this.status = "livre";
+  }
+  next();
+});
+
+// ⏳ (Opcional) descartar automaticamente rotas antigas (7 dias)
+RotaDiaSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 7 });
 
 module.exports = mongoose.model("RotaDia", RotaDiaSchema);

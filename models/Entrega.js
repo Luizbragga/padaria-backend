@@ -1,6 +1,41 @@
 const mongoose = require("mongoose");
 
-const entregaSchema = new mongoose.Schema(
+/* ---------------- Subschemas ---------------- */
+
+const ProdutoEntregaSchema = new mongoose.Schema(
+  {
+    // Para compatibilidade com dados antigos, permitimos tanto nome direto
+    // quanto uma referência opcional ao Produto.
+    produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" }, // opcional
+    nome: { type: String, required: true, trim: true },
+    quantidade: { type: Number, required: true, min: 1 },
+    precoUnitario: { type: Number, required: true, min: 0 },
+    subtotal: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
+const PagamentoSchema = new mongoose.Schema(
+  {
+    valor: { type: Number, required: true, min: 0 },
+    forma: { type: String, default: "não informado", trim: true },
+    data: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
+const ProblemaSchema = new mongoose.Schema(
+  {
+    tipo: { type: String, required: true, trim: true },
+    descricao: { type: String, required: true, trim: true },
+    data: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
+/* ---------------- Schema principal ---------------- */
+
+const EntregaSchema = new mongoose.Schema(
   {
     cliente: {
       type: mongoose.Schema.Types.ObjectId,
@@ -11,6 +46,7 @@ const entregaSchema = new mongoose.Schema(
     endereco: {
       type: String,
       required: true,
+      trim: true,
     },
 
     horaPrevista: {
@@ -21,7 +57,7 @@ const entregaSchema = new mongoose.Schema(
     entregador: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Usuario",
-      required: false,
+      required: false, // é definido quando o entregador assume a rota
     },
 
     padaria: {
@@ -35,14 +71,14 @@ const entregaSchema = new mongoose.Schema(
       default: true,
     },
 
-    produtos: [
-      {
-        nome: { type: String, required: true },
-        quantidade: { type: Number, required: true },
-        precoUnitario: { type: Number, required: true }, // ← novo
-        subtotal: { type: Number, required: true }, // ← novo
+    produtos: {
+      type: [ProdutoEntregaSchema],
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.length > 0,
+        message: "A entrega deve conter ao menos um produto.",
       },
-    ],
+      required: true,
+    },
 
     entregue: {
       type: Boolean,
@@ -54,28 +90,39 @@ const entregaSchema = new mongoose.Schema(
       default: false,
     },
 
-    pagamentos: [
-      {
-        valor: { type: Number },
-        forma: { type: String },
-        data: { type: Date },
-      },
-    ],
+    pagamentos: {
+      type: [PagamentoSchema],
+      default: [],
+    },
 
-    problemas: [
-      {
-        tipo: { type: String },
-        descricao: { type: String },
-        data: { type: Date },
-      },
-    ],
+    problemas: {
+      type: [ProblemaSchema],
+      default: [],
+    },
 
+    // Coordenadas do destino; opcionais aqui para não travar fluxos avulsos.
     location: {
-      lat: { type: Number },
-      lng: { type: Number },
+      lat: { type: Number, required: false },
+      lng: { type: Number, required: false },
     },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Entrega", entregaSchema);
+/* ---------------- Índices úteis ---------------- */
+
+// Consultas por data e padaria (dashboards e painéis)
+EntregaSchema.index({ padaria: 1, createdAt: -1 });
+
+// Filtro comum: status + padaria no dia
+EntregaSchema.index({ padaria: 1, entregue: 1, pago: 1, createdAt: -1 });
+
+// Para listar “minhas entregas” rapidamente
+EntregaSchema.index({ entregador: 1, entregue: 1, createdAt: -1 });
+
+// Para buscas por cliente no dia
+EntregaSchema.index({ cliente: 1, createdAt: -1 });
+
+/* ---------------- Export ---------------- */
+
+module.exports = mongoose.model("Entrega", EntregaSchema);

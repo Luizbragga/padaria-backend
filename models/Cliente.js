@@ -1,88 +1,72 @@
 const mongoose = require("mongoose");
 
-const clienteSchema = new mongoose.Schema(
+const PadraoSemanalSchema = new mongoose.Schema(
+  {
+    produto: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Produto",
+      required: true,
+    },
+    quantidade: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+  },
+  { _id: false }
+);
+
+const ClienteSchema = new mongoose.Schema(
   {
     nome: {
       type: String,
       required: true,
+      trim: true,
     },
-    telefone: String,
     endereco: {
       type: String,
       required: true,
+      trim: true,
     },
     location: {
-      lat: { type: Number, required: true },
-      lng: { type: Number, required: true },
+      lat: {
+        type: Number,
+        required: true,
+      },
+      lng: {
+        type: Number,
+        required: true,
+      },
+    },
+    telefone: {
+      type: String,
+      trim: true,
+    },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
     },
     padaria: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Padaria",
       required: true,
     },
-    rota: {
-      type: String,
-      required: true,
-    },
-    padraoSemanal: {
-      segunda: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-      terca: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-      quarta: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-      quinta: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-      sexta: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-      sabado: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-      domingo: [
-        {
-          produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" },
-          quantidade: Number,
-        },
-      ],
-    },
-
-    alteracoesPontuais: [
-      {
-        data: Date,
-        produtos: [{ produto: String, quantidade: Number }],
-      },
-    ],
     ativo: {
       type: Boolean,
       default: true,
     },
+    padraoSemanal: {
+      domingo: [PadraoSemanalSchema],
+      segunda: [PadraoSemanalSchema],
+      terca: [PadraoSemanalSchema],
+      quarta: [PadraoSemanalSchema],
+      quinta: [PadraoSemanalSchema],
+      sexta: [PadraoSemanalSchema],
+      sabado: [PadraoSemanalSchema],
+    },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-module.exports = mongoose.model("Cliente", clienteSchema);
+module.exports = mongoose.model("Cliente", ClienteSchema);
