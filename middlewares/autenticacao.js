@@ -1,43 +1,64 @@
+// middlewares/autenticacao.js
 const jwt = require("jsonwebtoken");
 const Usuario = require("../models/Usuario");
-const JWT_SECRET = process.env.JWT_SECRET;
 
+const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error("JWT_SECRET não definido. Verifique o .env");
 }
 
 module.exports = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ erro: "Token não fornecido." });
-  }
-
-  const token = authHeader.split(" ")[1];
-
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const authHeader = req.headers.authorization || "";
 
-    const usuario = await Usuario.findById(decoded.id);
+    // Espera "Bearer <token>"
+    if (!authHeader.toLowerCase().startsWith("bearer ")) {
+      return res.status(401).json({ erro: "Token não fornecido." });
+    }
+
+    const token = authHeader.slice(7).trim(); // remove "Bearer "
+    if (!token) {
+      return res.status(401).json({ erro: "Token não fornecido." });
+    }
+
+    // Valida JWT
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ erro: "Token inválido ou expirado." });
+    }
+
+    // Busca usuário com projeção mínima
+    const usuario = await Usuario.findById(decoded.id)
+      .select("_id role padaria ativo nome")
+      .lean();
+
     if (!usuario) {
       return res.status(401).json({ erro: "Usuário não encontrado." });
     }
-    req.usuario = {
-      id: usuario._id.toString(),
-      role: usuario.role,
-    };
 
-    // Apenas se o usuário tiver padaria vinculada, adiciona
+    // (Opcional) bloqueio por inatividade
+    if (usuario.ativo === false) {
+      return res.status(403).json({ erro: "Usuário desativado." });
+    }
+
+    // Regra: não-admin precisa ter padaria vinculada
     if (usuario.role !== "admin" && !usuario.padaria) {
       return res.status(403).json({ erro: "Usuário sem padaria vinculada." });
     }
 
-    if (usuario.padaria) {
-      req.usuario.padaria = usuario.padaria.toString();
-    }
+    // Anexa dados úteis no request
+    req.usuario = {
+      id: String(usuario._id),
+      role: usuario.role,
+      nome: usuario.nome,
+      ...(usuario.padaria ? { padaria: String(usuario.padaria) } : {}),
+    };
 
-    next();
+    return next();
   } catch (err) {
-    return res.status(401).json({ erro: "Token inválido ou expirado." });
+    // fallback
+    return res.status(401).json({ erro: "Falha na autenticação." });
   }
 };
