@@ -2,13 +2,15 @@
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
+
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
+
 const Entrega = require("../models/Entrega");
 const RotaEntregador = require("../models/RotaEntregador");
 const logger = require("../logs/utils/logger");
 
-// ---- helpers: range de "hoje"
+// --- helpers: faixa de "hoje" (00:00:00 -> 23:59:59 local)
 function hojeRange() {
   const ini = new Date();
   ini.setHours(0, 0, 0, 0);
@@ -17,21 +19,23 @@ function hojeRange() {
   return { ini, fim };
 }
 
+// todas as rotas daqui para baixo exigem usuário autenticado
 router.use(autenticar);
 
 /**
  * GET /rota-entregador
- * Entregas do ENTREGADOR logado, SOMENTE de hoje e da padaria dele.
+ * Lista as entregas do ENTREGADOR logado, SOMENTE do dia atual e da padaria dele.
+ * (Gerentes não acessam aqui; se precisarem assumir rota, admin cria um usuário entregador backup.)
  */
 router.get("/", autorizar("entregador"), async (req, res) => {
   try {
     const entregadorId = req.usuario.id;
-    const padariaId = req.usuario.padaria; // segurança extra
+    const padariaId = req.usuario.padaria; // segurança: restringe à padaria do usuário
     const { ini, fim } = hojeRange();
 
     const entregas = await Entrega.find({
       padaria: padariaId,
-      entregador: entregadorId,
+      entregador: new mongoose.Types.ObjectId(entregadorId),
       entregue: { $in: [false, null] },
       $or: [
         { createdAt: { $gte: ini, $lt: fim } },
@@ -43,17 +47,18 @@ router.get("/", autorizar("entregador"), async (req, res) => {
       .populate("cliente", "nome rota")
       .lean();
 
-    logger.info(`📦 ENTREGAS DE HOJE (${req.usuario.nome}):`, entregas.length);
-    res.json(entregas);
+    logger.info(`📦 Entregas pendentes de hoje: ${entregas.length}`);
+    return res.json(entregas);
   } catch (err) {
-    logger.error("🛑 ERRO AO BUSCAR ENTREGAS:", err);
-    res.status(500).json({ erro: "Erro ao buscar entregas." });
+    logger.error("🛑 ERRO ao buscar entregas do entregador:", err);
+    return res.status(500).json({ erro: "Erro ao buscar entregas." });
   }
 });
 
 /**
  * PATCH /rota-entregador/concluir
  * Finaliza a rota do dia do entregador (se houver entregas concluídas).
+ * Atualiza métricas na collection RotaEntregador.
  */
 router.patch("/concluir", autorizar("entregador"), async (req, res) => {
   try {
@@ -64,15 +69,7 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
     const amanha = new Date(hoje);
     amanha.setDate(hoje.getDate() + 1);
 
-    logger.info("🧪 ID Entregador:", entregadorId);
-    logger.info(
-      "📅 HOJE:",
-      hoje.toISOString(),
-      "📅 AMANHÃ:",
-      amanha.toISOString()
-    );
-
-    // rota do dia (se o seu schema usar outro campo de data, ajuste aqui)
+    // obtém/valida o registro de rota do dia
     const rota = await RotaEntregador.findOne({
       entregadorId: new mongoose.Types.ObjectId(entregadorId),
       data: { $gte: hoje, $lt: amanha },
@@ -82,13 +79,11 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
       return res.status(404).json({ erro: "Rota do dia não encontrada." });
     }
 
-    // entregas do dia do entregador
+    // entregas do dia deste entregador (opcional: também filtrar pela padaria)
     const entregas = await Entrega.find({
       entregador: new mongoose.Types.ObjectId(entregadorId),
       createdAt: { $gte: hoje, $lt: amanha },
     });
-
-    logger.info("📦 ENTREGAS DO DIA:", entregas.length);
 
     if (!entregas || entregas.length === 0) {
       return res
@@ -105,10 +100,10 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
 
     const fimRota = new Date();
 
-    // usa o início que existir no seu schema (fallbacks)
+    // base para cálculo de duração (usa o que existir; fallback para hoje 00:00)
     const inicioBase =
       rota.inicioRota || rota.claimedAt || rota.createdAt || hoje;
-    const tempoTotal = Math.max(
+    const tempoTotalMinutos = Math.max(
       0,
       Math.floor((fimRota - new Date(inicioBase)) / 60000)
     );
@@ -117,7 +112,7 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
     const entregasConcluidas = concluidas.length;
     const pagamentosRecebidos = entregas.filter((e) => e.pago === true).length;
     const problemasReportados = entregas.filter(
-      (e) => e.problemas && e.problemas.length > 0
+      (e) => Array.isArray(e.problemas) && e.problemas.length > 0
     ).length;
 
     await RotaEntregador.updateOne(
@@ -125,7 +120,7 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
       {
         $set: {
           fimRota,
-          tempoTotalMinutos: tempoTotal,
+          tempoTotalMinutos,
           entregasTotais,
           entregasConcluidas,
           pagamentosRecebidos,
@@ -135,16 +130,16 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
     );
 
     return res.json({
-      entregador: req.usuario.nome,
+      entregadorId,
       entregasTotais,
       entregasConcluidas,
-      tempoTotalMinutos: tempoTotal,
+      tempoTotalMinutos,
       pagamentosRecebidos,
       problemasReportados,
     });
   } catch (err) {
-    logger.error("🛑 ERRO AO CONCLUIR ROTA:", err);
-    res.status(500).json({ erro: "Erro ao concluir a rota." });
+    logger.error("🛑 ERRO ao concluir rota do entregador:", err);
+    return res.status(500).json({ erro: "Erro ao concluir a rota." });
   }
 });
 

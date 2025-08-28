@@ -4,9 +4,12 @@ const router = express.Router();
 const usuariosController = require("../controllers/usuariosController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
-const Usuario = require("../models/Usuario"); // <- faltava isso aqui
+const Usuario = require("../models/Usuario");
 
-// Admin cria novo usuário
+/**
+ * POST /usuarios
+ * Criar novo usuário (somente admin)
+ */
 router.post(
   "/",
   autenticar,
@@ -14,27 +17,48 @@ router.post(
   usuariosController.criarUsuario
 );
 
-// Entregador envia localização atual
-router.put("/atualizar-localizacao", autenticar, async (req, res) => {
-  try {
-    const { latitude, longitude } = req.body;
+/**
+ * PUT /usuarios/atualizar-localizacao
+ * Atualiza a localização atual do entregador logado
+ */
+router.put(
+  "/atualizar-localizacao",
+  autenticar,
+  autorizar("entregador"),
+  async (req, res) => {
+    try {
+      let { latitude, longitude } = req.body;
 
-    if (!latitude || !longitude) {
-      return res
-        .status(400)
-        .json({ erro: "Latitude e longitude são obrigatórios." });
+      if (latitude === undefined || longitude === undefined) {
+        return res
+          .status(400)
+          .json({ erro: "Latitude e longitude são obrigatórios." });
+      }
+
+      latitude = Number(latitude);
+      longitude = Number(longitude);
+
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return res
+          .status(400)
+          .json({ erro: "Latitude e longitude devem ser numéricos." });
+      }
+
+      await Usuario.findByIdAndUpdate(req.usuario.id, {
+        localizacaoAtual: { latitude, longitude },
+      });
+
+      res.json({ mensagem: "Localização atualizada com sucesso." });
+    } catch (error) {
+      console.error("Erro ao atualizar localização:", error);
+      res
+        .status(500)
+        .json({
+          erro: "Erro ao atualizar localização",
+          detalhes: error.message,
+        });
     }
-
-    await Usuario.findByIdAndUpdate(req.usuario.id, {
-      localizacaoAtual: { latitude, longitude },
-    });
-
-    res.json({ mensagem: "Localização atualizada com sucesso." });
-  } catch (error) {
-    res
-      .status(500)
-      .json({ erro: "Erro ao atualizar localização", detalhes: error.message });
   }
-});
+);
 
 module.exports = router;

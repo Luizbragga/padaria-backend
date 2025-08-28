@@ -1,3 +1,4 @@
+// routes/entregas.js
 const express = require("express");
 const router = express.Router();
 
@@ -7,25 +8,31 @@ const estatisticasController = require("../controllers/estatisticasController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 
-// 📦 CRUD básico
+// =======================
+// 📦 CRUD / Operações base
+// =======================
 router.get(
   "/",
   autenticar,
   autorizar("admin", "gerente"),
   entregasController.listarEntregas
 );
-router.post(
-  "/",
-  autenticar,
-  autorizar("admin"),
-  entregasController.criarEntrega
-);
+
+// (opcional) criação manual de entrega individual — mantido comentado
+// router.post(
+//   "/",
+//   autenticar,
+//   autorizar("admin"),
+//   entregasController.criarEntrega
+// );
+
 router.put(
   "/:id",
   autenticar,
   autorizar("admin", "gerente"),
   entregasController.atualizarEntrega
 );
+
 router.delete(
   "/:id",
   autenticar,
@@ -33,7 +40,19 @@ router.delete(
   entregasController.deletarEntrega
 );
 
-// ✅ Concluir entrega (entregador)
+// =======================
+// 👤 Entregador
+// =======================
+
+// Lista SOMENTE as entregas do entregador logado (usado em /entregas/minhas do frontend)
+router.get(
+  "/minhas",
+  autenticar,
+  autorizar("entregador"),
+  entregasController.listarMinhasEntregas
+);
+
+// Concluir entrega
 router.put(
   "/:id/concluir",
   autenticar,
@@ -41,7 +60,7 @@ router.put(
   entregasController.concluirEntrega
 );
 
-// 💸 Registrar pagamento
+// Registrar pagamento (entregador e gerente podem)
 router.post(
   "/:id/registrar-pagamento",
   autenticar,
@@ -49,7 +68,7 @@ router.post(
   entregasController.registrarPagamento
 );
 
-// ❗ Relatar problema
+// Relatar problema
 router.post(
   "/:id/relatar-problema",
   autenticar,
@@ -57,7 +76,10 @@ router.post(
   entregasController.relatarProblema
 );
 
-// 📴 Desativar entrega
+// =======================
+// 📴 Administração da entrega
+// =======================
+
 router.patch(
   "/:id/desativar",
   autenticar,
@@ -65,7 +87,6 @@ router.patch(
   entregasController.desativarEntrega
 );
 
-// ♻️ Reutilizar entrega
 router.post(
   "/:id/reutilizar",
   autenticar,
@@ -73,7 +94,9 @@ router.post(
   entregasController.reutilizarEntrega
 );
 
-// 📅 Entregas do dia (gerente)
+// =======================
+// 📅 Gerente
+// =======================
 router.get(
   "/hoje",
   autenticar,
@@ -81,18 +104,54 @@ router.get(
   entregasController.listarEntregasDoDia
 );
 
+// =======================
 // 📊 Estatísticas
-router.get("/estatisticas/total", entregasController.contarEntregas);
+// =======================
+
+// (se quiser manter públicos, pode remover os middlewares destes 5 abaixo)
+router.get(
+  "/estatisticas/total",
+  autenticar,
+  autorizar("admin", "gerente"),
+  entregasController.contarEntregas
+);
+
 router.get(
   "/estatisticas/inadimplentes",
+  autenticar,
+  autorizar("admin", "gerente"),
   entregasController.contarInadimplentes
 );
-router.get("/estatisticas/por-data", entregasController.contarPorData);
-router.get("/estatisticas/por-cliente", entregasController.contarPorCliente);
-router.get("/estatisticas/por-produto", entregasController.contarPorProduto);
-router.get("/estatisticas/por-status", entregasController.contarPorStatus);
 
-// 📈 Estatísticas avançadas (painel gerente)
+router.get(
+  "/estatisticas/por-data",
+  autenticar,
+  autorizar("admin", "gerente"),
+  entregasController.contarPorData
+);
+
+router.get(
+  "/estatisticas/por-cliente",
+  autenticar,
+  autorizar("admin", "gerente"),
+  entregasController.contarPorCliente
+);
+
+router.get(
+  "/estatisticas/por-produto",
+  autenticar,
+  autorizar("admin", "gerente"),
+  entregasController.contarPorProduto
+);
+
+router.get(
+  "/estatisticas/por-status",
+  autenticar,
+  autorizar("admin", "gerente"),
+  entregasController.contarPorStatus
+);
+
+// Estatísticas avançadas (painel do gerente)
 router.get(
   "/estatisticas/gerente",
   autenticar,
@@ -100,7 +159,9 @@ router.get(
   estatisticasController.estatisticasGerente
 );
 
-// 🛠️ Rota debug (visualizar todas as entregas rapidamente)
+// =======================
+// 🛠️ Rota debug (opcional | não-produção)
+// =======================
 router.get("/debug/todas", async (req, res) => {
   const Entrega = require("../models/Entrega");
   try {

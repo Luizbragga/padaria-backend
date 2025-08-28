@@ -1,90 +1,163 @@
+// routes/padarias.js
 const express = require("express");
 const router = express.Router();
-const Padaria = require("../models/Padaria");
+const mongoose = require("mongoose");
+const Joi = require("joi");
 
+const Padaria = require("../models/Padaria");
 const padariasController = require("../controllers/padariasController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 
-// Rota de criação (mantida)
+/* =========================
+   Schemas de validação (Joi)
+   ========================= */
+const criarPadariaSchema = Joi.object({
+  nome: Joi.string().trim().min(2).max(120).required(),
+  cidade: Joi.string().trim().min(2).max(120).required(),
+  estado: Joi.string().trim().min(1).max(60).required(),
+  ativa: Joi.boolean().optional(), // default no model já é true
+});
+
+/* Pequeno helper pra validar ObjectId */
+function garantirObjectIdValido(id, res) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400).json({ erro: "ID inválido." });
+    return false;
+  }
+  return true;
+}
+
+/* =========================
+   ROTAS
+   ========================= */
+
+// Criar padaria (ADMIN)
 router.post("/", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const novaPadaria = await Padaria.create(req.body);
-    res.status(201).json(novaPadaria);
+    const { error, value } = criarPadariaSchema.validate(req.body);
+    if (error) {
+      return res
+        .status(400)
+        .json({ mensagem: "Dados inválidos", erro: error.message });
+    }
+
+    // (opcional) evitar duplicidade por nome+cidade+estado
+    const existe = await Padaria.findOne({
+      nome: value.nome,
+      cidade: value.cidade,
+      estado: value.estado,
+    }).lean();
+
+    if (existe) {
+      return res
+        .status(409)
+        .json({ mensagem: "Já existe uma padaria com esses dados." });
+    }
+
+    const novaPadaria = await Padaria.create(value);
+    return res.status(201).json(novaPadaria);
   } catch (erro) {
-    res
+    return res
       .status(400)
       .json({ mensagem: "Erro ao criar padaria", erro: erro.message });
   }
 });
 
-// ✅ Nova rota de listagem
+// Listar padarias (ADMIN)
 router.get(
   "/",
   autenticar,
   autorizar("admin"),
   padariasController.listarPadarias
 );
+
+// Listar usuários de uma padaria (ADMIN)
 router.get(
   "/:id/usuarios",
   autenticar,
   autorizar("admin"),
+  (req, res, next) => {
+    if (!garantirObjectIdValido(req.params.id, res)) return;
+    next();
+  },
   padariasController.listarUsuariosPorPadaria
 );
-// Desativar padaria
+
+// Desativar padaria (ADMIN)
 router.patch(
   "/:id/desativar",
   autenticar,
   autorizar("admin"),
   async (req, res) => {
     try {
-      const padaria = await Padaria.findById(req.params.id);
+      const { id } = req.params;
+      if (!garantirObjectIdValido(id, res)) return;
+
+      const padaria = await Padaria.findById(id);
       if (!padaria)
         return res.status(404).json({ erro: "Padaria não encontrada." });
+
+      if (padaria.ativa === false) {
+        return res.json({ mensagem: "Padaria já está desativada.", padaria });
+      }
 
       padaria.ativa = false;
       await padaria.save();
 
-      res.json({ mensagem: "Padaria desativada com sucesso.", padaria });
+      return res.json({ mensagem: "Padaria desativada com sucesso.", padaria });
     } catch (err) {
-      res.status(500).json({ erro: "Erro ao desativar padaria." });
+      return res.status(500).json({ erro: "Erro ao desativar padaria." });
     }
   }
 );
 
-// Ativar padaria
+// Ativar padaria (ADMIN)
 router.patch(
   "/:id/ativar",
   autenticar,
   autorizar("admin"),
   async (req, res) => {
     try {
-      const padaria = await Padaria.findById(req.params.id);
+      const { id } = req.params;
+      if (!garantirObjectIdValido(id, res)) return;
+
+      const padaria = await Padaria.findById(id);
       if (!padaria)
         return res.status(404).json({ erro: "Padaria não encontrada." });
+
+      if (padaria.ativa === true) {
+        return res.json({ mensagem: "Padaria já está ativa.", padaria });
+      }
 
       padaria.ativa = true;
       await padaria.save();
 
-      res.json({ mensagem: "Padaria ativada com sucesso.", padaria });
+      return res.json({ mensagem: "Padaria ativada com sucesso.", padaria });
     } catch (err) {
-      res.status(500).json({ erro: "Erro ao ativar padaria." });
+      return res.status(500).json({ erro: "Erro ao ativar padaria." });
     }
   }
 );
-// Deletar padaria (apenas admin)
+
+// Deletar padaria (ADMIN)
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const padaria = await Padaria.findById(req.params.id);
+    const { id } = req.params;
+    if (!garantirObjectIdValido(id, res)) return;
+
+    const padaria = await Padaria.findById(id);
     if (!padaria) {
       return res.status(404).json({ erro: "Padaria não encontrada." });
     }
 
-    await Padaria.deleteOne({ _id: req.params.id });
+    // (opcional) aqui daria para checar vínculos (usuarios/entregas) antes de excluir
+    await Padaria.deleteOne({ _id: id });
 
-    res.json({ mensagem: "Padaria excluída permanentemente." });
+    return res.json({ mensagem: "Padaria excluída permanentemente." });
   } catch (err) {
-    res.status(500).json({ erro: "Erro ao excluir padaria." });
+    return res.status(500).json({ erro: "Erro ao excluir padaria." });
   }
 });
+
 module.exports = router;

@@ -3,7 +3,7 @@ const router = express.Router();
 const mongoose = require("mongoose");
 
 const autenticar = require("../middlewares/autenticacao");
-const autorizar = require("../middlewares/autorizar"); // usado no force-release
+const autorizar = require("../middlewares/autorizar");
 const Entrega = require("../models/Entrega");
 const Cliente = require("../models/Cliente");
 const RotaDia = require("../models/RotaDia");
@@ -32,11 +32,11 @@ const STALE_MINUTES = 10; // sem ping por X min ⇒ permite reassumir
 router.use(autenticar);
 
 /* =====================================
-   GET /rotas/disponiveis
+   GET /rotas/disponiveis  (somente entregador)
    Lista rotas reais (via Cliente.rota)
    com contagem de pendentes no dia.
    ===================================== */
-router.get("/disponiveis", async (req, res) => {
+router.get("/disponiveis", autorizar("entregador"), async (req, res) => {
   try {
     const padariaId = req.usuario?.padaria;
     if (!padariaId)
@@ -50,8 +50,11 @@ router.get("/disponiveis", async (req, res) => {
     const data = dataHojeLocal();
 
     // rotas cadastradas via clientes
-    const rotas = await Cliente.distinct("rota", { padaria });
+    const rotas = (await Cliente.distinct("rota", { padaria }))
+      .filter(Boolean)
+      .map((r) => String(r).toUpperCase());
 
+    // locks do dia de uma vez
     const locks = await RotaDia.find({ padaria, data })
       .populate("entregador", "nome")
       .lean();
@@ -80,9 +83,8 @@ router.get("/disponiveis", async (req, res) => {
           })
         : 0;
 
-      const lock = locks.find(
-        (l) => String(l.rota).toUpperCase() === String(rota).toUpperCase()
-      );
+      const lock = locks.find((l) => String(l.rota).toUpperCase() === rota);
+
       let status = total === 0 ? "vazia" : "livre";
       let entregador = null;
       let stale = false;
@@ -101,16 +103,21 @@ router.get("/disponiveis", async (req, res) => {
             entregador = null;
           } else {
             status = "ocupada";
-            entregador = lock.entregador?.nome || String(lock.entregador);
+            // pode vir populado (objeto) ou só id
+            entregador =
+              (lock.entregador && lock.entregador.nome) ||
+              String(lock.entregador);
           }
         }
       }
 
       const ocupadaPorMim =
-        lock?.entregador && String(lock.entregador) === String(req.usuario?.id);
+        lock?.entregador &&
+        String(lock.entregador._id || lock.entregador) ===
+          String(req.usuario?.id);
 
       saida.push({
-        rota: String(rota).toUpperCase(),
+        rota,
         total,
         status,
         entregador,
@@ -127,16 +134,15 @@ router.get("/disponiveis", async (req, res) => {
 });
 
 /* =====================================
-   POST /rotas/claim  { rota }
+   POST /rotas/claim  { rota }   (somente entregador)
    Trava a rota (lock) e atribui entregas
    do dia **sem entregador** (ou já minhas).
    Se stale, também pega as do antigo dono.
    ===================================== */
-router.post("/claim", async (req, res) => {
+router.post("/claim", autorizar("entregador"), async (req, res) => {
   try {
     const usuarioId = req.usuario?.id;
     const padariaId = req.usuario?.padaria;
-    const entregadorNome = req.usuario?.nome || "";
     const rota = String(req.body?.rota || "")
       .toUpperCase()
       .trim();
@@ -201,7 +207,6 @@ router.post("/claim", async (req, res) => {
       lock.lastSeenAt = now;
     } else {
       lock.entregador = usuarioId;
-      lock.entregadorNome = entregadorNome;
       lock.lastSeenAt = now;
       lock.status = "ocupada";
       lock.historico = lock.historico || [];
@@ -249,11 +254,11 @@ router.post("/claim", async (req, res) => {
 });
 
 /* =====================================
-   POST /rotas/release
+   POST /rotas/release   (somente entregador)
    Libera lock do dia e DESATRIBUI
    as pendentes do entregador.
    ===================================== */
-router.post("/release", async (req, res) => {
+router.post("/release", autorizar("entregador"), async (req, res) => {
   try {
     const usuarioId = req.usuario?.id;
     const padariaId = req.usuario?.padaria;
@@ -280,7 +285,6 @@ router.post("/release", async (req, res) => {
     if (last && !last.fim) last.fim = now;
 
     lock.entregador = null;
-    lock.entregadorNome = undefined;
     lock.lastSeenAt = null;
     lock.status = "livre";
     await lock.save();
@@ -319,10 +323,10 @@ router.post("/release", async (req, res) => {
 });
 
 /* =====================================
-   POST /rotas/ping
+   POST /rotas/ping   (somente entregador)
    Mantém o lock “vivo”.
    ===================================== */
-router.post("/ping", async (req, res) => {
+router.post("/ping", autorizar("entregador"), async (req, res) => {
   try {
     const usuarioId = req.usuario?.id;
     const padariaId = req.usuario?.padaria;
@@ -373,7 +377,6 @@ router.post(
         {
           $set: {
             entregador: null,
-            entregadorNome: null,
             lastSeenAt: null,
             status: "livre",
           },

@@ -1,3 +1,4 @@
+// routes/entregasAvulsas.js
 const express = require("express");
 const router = express.Router();
 
@@ -5,7 +6,7 @@ const controller = require("../controllers/entregasAvulsasController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 
-// Criar entrega avulsa (admin ou gerente)
+// ✅ Criar entrega avulsa (admin ou gerente)
 router.post(
   "/",
   autenticar,
@@ -13,7 +14,7 @@ router.post(
   controller.criarEntregaAvulsa
 );
 
-// Listar entregas avulsas da padaria
+// 📄 Listar entregas avulsas da padaria (admin/gerente)
 router.get(
   "/",
   autenticar,
@@ -21,7 +22,7 @@ router.get(
   controller.listarEntregasAvulsas
 );
 
-// Marcar como entregue
+// ✅ Marcar como entregue (admin/gerente)
 router.put(
   "/:id/concluir",
   autenticar,
@@ -29,7 +30,7 @@ router.put(
   controller.marcarComoEntregue
 );
 
-// Registrar pagamento
+// 💸 Registrar pagamento (admin/gerente)
 router.post(
   "/:id/registrar-pagamento",
   autenticar,
@@ -37,7 +38,7 @@ router.post(
   controller.registrarPagamento
 );
 
-// Deletar entrega avulsa
+// 🗑️ Deletar entrega avulsa (apenas admin)
 router.delete(
   "/:id",
   autenticar,
