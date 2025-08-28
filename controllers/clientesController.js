@@ -1,31 +1,218 @@
+// controllers/clientesController.js
+const mongoose = require("mongoose");
 const Cliente = require("../models/Cliente");
 const Padaria = require("../models/Padaria");
 
+/* ---------------- utils ---------------- */
+const toObjectIdIfValid = (v) =>
+  mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : v;
+
+function assertAdmin(req) {
+  const role = req?.usuario?.role;
+  if (role !== "admin") {
+    const err = new Error("Apenas administradores podem realizar esta ação.");
+    err.status = 403;
+    throw err;
+  }
+}
+
+function parseLocation(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const lat = Number(raw.lat);
+  const lng = Number(raw.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+function ensureHasValidLocation(location) {
+  if (!location) {
+    const err = new Error(
+      "Latitude/Longitude são obrigatórias (location { lat, lng })."
+    );
+    err.status = 400;
+    throw err;
+  }
+}
+
+/* ---------------- controllers ---------------- */
+
+/** POST /clientes  (ADMIN ONLY) */
 exports.criarCliente = async (req, res) => {
   try {
-    if (req.usuario.role !== "admin") {
+    assertAdmin(req);
+
+    const { nome, endereco, rota, padaria, location } = req.body;
+
+    if (!nome || !endereco || !rota || !padaria) {
       return res
-        .status(403)
-        .json({ erro: "Apenas administradores podem criar clientes." });
+        .status(400)
+        .json({ erro: "Campos obrigatórios: nome, endereco, rota, padaria." });
     }
 
-    const { padaria, ...dadosCliente } = req.body;
-
-    // Verifica se a padaria existe
-    const existePadaria = await Padaria.findById(padaria);
+    const padariaId = toObjectIdIfValid(padaria);
+    const existePadaria = await Padaria.findById(padariaId);
     if (!existePadaria) {
       return res.status(400).json({ erro: "Padaria não encontrada." });
     }
 
-    const novoCliente = new Cliente({
-      ...dadosCliente,
-      padaria,
+    // location obrigatório
+    const loc = parseLocation(location);
+    ensureHasValidLocation(loc);
+
+    const rotaNorm = String(rota).trim().toUpperCase();
+
+    // Evita duplicidade por nome dentro da mesma padaria
+    const jaExiste = await Cliente.findOne({
+      padaria: padariaId,
+      nome: new RegExp(`^${nome.trim()}$`, "i"),
+    });
+    if (jaExiste) {
+      return res
+        .status(409)
+        .json({ erro: "Já existe um cliente com esse nome nesta padaria." });
+    }
+
+    const novo = await Cliente.create({
+      nome: nome.trim(),
+      endereco: endereco.trim(),
+      rota: rotaNorm,
+      padaria: padariaId,
+      location: loc, // obrigatório
     });
 
-    await novoCliente.save();
-    res.status(201).json(novoCliente);
+    res.status(201).json(novo);
   } catch (erro) {
     console.error("Erro ao criar cliente:", erro);
-    res.status(500).json({ erro: "Erro ao criar cliente." });
+    res
+      .status(erro.status || 500)
+      .json({ erro: erro.message || "Erro ao criar cliente." });
+  }
+};
+
+/** GET /clientes?padaria=<id>&rota=A&busca=nome  (ADMIN ou GERENTE) */
+exports.listarClientes = async (req, res) => {
+  try {
+    const { role, padaria: padariaUser } = req.usuario || {};
+    const { padaria: padariaQuery, rota, busca } = req.query;
+
+    let filtro = {};
+    if (role === "admin") {
+      if (padariaQuery) filtro.padaria = toObjectIdIfValid(padariaQuery);
+    } else if (role === "gerente") {
+      if (!padariaUser)
+        return res.status(400).json({ erro: "Usuário sem padaria." });
+      filtro.padaria = toObjectIdIfValid(padariaUser);
+    } else {
+      return res
+        .status(403)
+        .json({ erro: "Apenas administradores ou gerentes podem consultar." });
+    }
+
+    if (rota) filtro.rota = String(rota).trim().toUpperCase();
+    if (busca) filtro.nome = new RegExp(busca.trim(), "i");
+
+    const clientes = await Cliente.find(filtro).sort({ nome: 1 }).lean();
+    res.json(clientes);
+  } catch (erro) {
+    console.error("Erro ao listar clientes:", erro);
+    res.status(500).json({ erro: "Erro ao listar clientes." });
+  }
+};
+
+/** PATCH /clientes/:id  (ADMIN ou GERENTE) */
+exports.atualizarCliente = async (req, res) => {
+  try {
+    const { role, padaria: padariaUser } = req?.usuario || {};
+    if (!["admin", "gerente"].includes(role)) {
+      return res.status(403).json({ erro: "Acesso negado." });
+    }
+
+    const { id } = req.params;
+    const { nome, endereco, rota, padaria, location } = req.body;
+
+    const cliente = await Cliente.findById(id);
+    if (!cliente) {
+      return res.status(404).json({ erro: "Cliente não encontrado." });
+    }
+
+    // GERENTE só pode mexer em cliente da própria padaria
+    if (role === "gerente") {
+      if (!padariaUser)
+        return res.status(400).json({ erro: "Usuário sem padaria." });
+      if (String(cliente.padaria) !== String(padariaUser)) {
+        return res
+          .status(403)
+          .json({
+            erro: "Gerente só pode editar clientes da própria padaria.",
+          });
+      }
+      // gerente não pode trocar a padaria do cliente
+      if (
+        typeof padaria !== "undefined" &&
+        String(padaria) !== String(cliente.padaria)
+      ) {
+        return res
+          .status(403)
+          .json({ erro: "Gerente não pode alterar a padaria do cliente." });
+      }
+    }
+
+    // Admin pode trocar a padaria, mas seguimos exigindo que exista
+    if (role === "admin" && typeof padaria !== "undefined") {
+      const padariaId = toObjectIdIfValid(padaria);
+      const existePadaria = await Padaria.findById(padariaId);
+      if (!existePadaria) {
+        return res.status(400).json({ erro: "Padaria não encontrada." });
+      }
+      cliente.padaria = padariaId;
+    }
+
+    if (typeof nome === "string") cliente.nome = nome.trim();
+    if (typeof endereco === "string") cliente.endereco = endereco.trim();
+    if (typeof rota === "string") cliente.rota = rota.trim().toUpperCase();
+
+    // location é OBRIGATÓRIO no resultado final:
+    // - se veio no body, valida e aplica;
+    // - se não veio, valida se o cliente já possui location válido;
+    if (typeof location !== "undefined") {
+      const loc = parseLocation(location);
+      ensureHasValidLocation(loc);
+      cliente.location = loc;
+    } else {
+      // não veio no body — garante que o cliente já tem location válido
+      const loc = parseLocation(cliente.location);
+      ensureHasValidLocation(loc);
+      // mantém o existente
+    }
+
+    const atualizado = await cliente.save();
+    res.json(atualizado);
+  } catch (erro) {
+    console.error("Erro ao atualizar cliente:", erro);
+    res
+      .status(erro.status || 500)
+      .json({ erro: erro.message || "Erro ao atualizar cliente." });
+  }
+};
+
+/** DELETE /clientes/:id  (ADMIN ONLY) */
+exports.deletarCliente = async (req, res) => {
+  try {
+    assertAdmin(req);
+
+    const { id } = req.params;
+    const cliente = await Cliente.findById(id);
+    if (!cliente) {
+      return res.status(404).json({ erro: "Cliente não encontrado." });
+    }
+
+    await Cliente.deleteOne({ _id: id });
+    res.json({ ok: true });
+  } catch (erro) {
+    console.error("Erro ao deletar cliente:", erro);
+    res
+      .status(erro.status || 500)
+      .json({ erro: erro.message || "Erro ao deletar cliente." });
   }
 };

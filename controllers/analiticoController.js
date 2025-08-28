@@ -1,10 +1,52 @@
+// controllers/analiticoController.js
 const mongoose = require("mongoose");
 const Entrega = require("../models/Entrega");
 const Usuario = require("../models/Usuario");
 
+// ——— helpers
+const toObjectIdIfValid = (v) =>
+  mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : v;
+
+const getPadariaFromReq = (req) =>
+  req.query.padaria || req.query.padariaId || req.usuario?.padaria || null;
+
+const hojeRange = () => {
+  const ini = new Date();
+  ini.setHours(0, 0, 0, 0);
+  const fim = new Date(ini);
+  fim.setDate(ini.getDate() + 1);
+  return { ini, fim };
+};
+
+const sumProdutosEsperado = (entrega) => {
+  if (!Array.isArray(entrega?.produtos)) return 0;
+  return entrega.produtos.reduce((acc, p) => {
+    if (typeof p?.subtotal === "number") return acc + p.subtotal;
+    const qtd = Number(p?.quantidade || 0);
+    const pu = Number(p?.precoUnitario || 0);
+    return acc + qtd * pu;
+  }, 0);
+};
+
+const sumPagamentos = (entrega) => {
+  if (!Array.isArray(entrega?.pagamentos)) return 0;
+  return entrega.pagamentos.reduce(
+    (acc, pg) => acc + (Number(pg?.valor) || 0),
+    0
+  );
+};
+
+/* ========== ENDPOINTS ========== */
+
+// /analitico/entregas-por-dia
 exports.entregasPorDia = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+
     const resultado = await Entrega.aggregate([
+      { $match: match },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
@@ -22,6 +64,7 @@ exports.entregasPorDia = async (req, res) => {
         },
       },
     ]);
+
     res.json(resultado);
   } catch (erro) {
     res
@@ -30,36 +73,42 @@ exports.entregasPorDia = async (req, res) => {
   }
 };
 
+// /analitico/inadimplencia
+// Retorna: { pagantes, inadimplentes }
 exports.inadimplencia = async (req, res) => {
   try {
-    const resultado = await Entrega.aggregate([
-      { $match: { pago: false } },
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+
+    const agreg = await Entrega.aggregate([
+      { $match: match },
       {
         $group: {
-          _id: "$cliente",
-          entregasNaoPagas: { $sum: 1 },
-          valorPendente: { $sum: { $sum: "$produtos.precoTotal" } }, // revisar depois
+          _id: "$pago",
+          total: { $sum: 1 },
         },
       },
-      {
-        $project: {
-          _id: 0,
-          cliente: "$_id",
-          entregasNaoPagas: 1,
-          valorPendente: 1,
-        },
-      },
-      { $sort: { valorPendente: -1 } },
     ]);
-    res.json(resultado);
+
+    const pagantes = agreg.find((x) => x._id === true)?.total || 0;
+    const inadimplentes = agreg.find((x) => x._id === false)?.total || 0;
+
+    res.json({ pagantes, inadimplentes });
   } catch (erro) {
     res.status(500).json({ erro: "Erro ao gerar relatório de inadimplência." });
   }
 };
 
+// (opcional / não usado no front atual)
 exports.produtosMaisEntregues = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+
     const resultado = await Entrega.aggregate([
+      { $match: match },
       { $unwind: "$produtos" },
       {
         $group: {
@@ -82,17 +131,37 @@ exports.produtosMaisEntregues = async (req, res) => {
   }
 };
 
+// /analitico/entregas-por-entregador?padaria=...
+// controllers/analiticoController.js
+// ... topo do arquivo já tem: const mongoose = require("mongoose");
+
 exports.entregasPorEntregador = async (req, res) => {
   try {
+    // Se for admin, pode passar ?padaria=<id>. Caso contrário, usa a padaria do usuário logado.
+    const padariaParam =
+      req.usuario?.role === "admin" ? req.query.padaria : req.usuario?.padaria;
+
+    if (!padariaParam || !mongoose.Types.ObjectId.isValid(padariaParam)) {
+      return res
+        .status(400)
+        .json({ erro: "Padaria não informada ou inválida para este usuário." });
+    }
+
+    const match = { padaria: new mongoose.Types.ObjectId(padariaParam) };
+
     const resultado = await Entrega.aggregate([
+      { $match: match },
+
       {
         $group: {
-          _id: "$entregador",
+          _id: "$entregador", // pode ser null em entregas ainda não atribuídas
           totalEntregas: { $sum: 1 },
           entregues: { $sum: { $cond: ["$entregue", 1, 0] } },
           pendentes: { $sum: { $cond: ["$entregue", 0, 1] } },
         },
       },
+
+      // Traz o nome do entregador (se houver)
       {
         $lookup: {
           from: "usuarios",
@@ -101,41 +170,49 @@ exports.entregasPorEntregador = async (req, res) => {
           as: "entregadorInfo",
         },
       },
-      { $unwind: "$entregadorInfo" },
+      {
+        $unwind: {
+          path: "$entregadorInfo",
+          preserveNullAndEmptyArrays: true, // mantém linhas sem entregador ainda
+        },
+      },
+
       {
         $project: {
           _id: 0,
-          entregador: "$entregadorInfo.nome",
+          entregadorId: "$_id",
+          entregador: {
+            $ifNull: ["$entregadorInfo.nome", "Sem entregador"],
+          },
           totalEntregas: 1,
           entregues: 1,
           pendentes: 1,
         },
       },
-      { $sort: { totalEntregas: -1 } },
+
+      // ordena por total desc (cara de ranking)
+      { $sort: { totalEntregas: -1, entregues: -1 } },
     ]);
+
     res.json(resultado);
   } catch (erro) {
+    console.error("Erro em entregasPorEntregador:", erro);
     res.status(500).json({ erro: "Erro ao gerar relatório de entregadores." });
   }
 };
 
+// (opcionais não usados no front agora)
 exports.problemasPorTipo = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+
     const resultado = await Entrega.aggregate([
+      { $match: match },
       { $unwind: "$problemas" },
-      {
-        $group: {
-          _id: "$problemas.tipo",
-          total: { $sum: 1 },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          tipo: "$_id",
-          total: 1,
-        },
-      },
+      { $group: { _id: "$problemas.tipo", total: { $sum: 1 } } },
+      { $project: { _id: 0, tipo: "$_id", total: 1 } },
       { $sort: { total: -1 } },
     ]);
     res.json(resultado);
@@ -148,21 +225,15 @@ exports.problemasPorTipo = async (req, res) => {
 
 exports.problemasPorCliente = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+
     const resultado = await Entrega.aggregate([
+      { $match: match },
       { $unwind: "$problemas" },
-      {
-        $group: {
-          _id: "$cliente",
-          total: { $sum: 1 },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          cliente: "$_id",
-          total: 1,
-        },
-      },
+      { $group: { _id: "$cliente", total: { $sum: 1 } } },
+      { $project: { _id: 0, cliente: "$_id", total: 1 } },
       { $sort: { total: -1 } },
     ]);
     res.json(resultado);
@@ -173,12 +244,16 @@ exports.problemasPorCliente = async (req, res) => {
   }
 };
 
+// /analitico/formas-pagamento (opcional)
 exports.formasDePagamento = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    if (!padariaId) return res.json([]);
+
     const resultado = await Entrega.aggregate([
       {
         $match: {
-          padaria: new mongoose.Types.ObjectId(req.usuario.padaria),
+          padaria: toObjectIdIfValid(padariaId),
           "pagamentos.0": { $exists: true },
         },
       },
@@ -190,14 +265,7 @@ exports.formasDePagamento = async (req, res) => {
           valorTotal: { $sum: "$pagamentos.valor" },
         },
       },
-      {
-        $project: {
-          _id: 0,
-          forma: "$_id",
-          quantidade: 1,
-          valorTotal: 1,
-        },
-      },
+      { $project: { _id: 0, forma: "$_id", quantidade: 1, valorTotal: 1 } },
       { $sort: { valorTotal: -1 } },
     ]);
     res.json(resultado);
@@ -208,7 +276,8 @@ exports.formasDePagamento = async (req, res) => {
   }
 };
 
-exports.clientesPorMes = async (req, res) => {
+// (opcional)
+exports.clientesPorMes = async (_req, res) => {
   try {
     const resultado = await Usuario.aggregate([
       {
@@ -219,13 +288,7 @@ exports.clientesPorMes = async (req, res) => {
           novosClientes: { $sum: 1 },
         },
       },
-      {
-        $project: {
-          _id: 0,
-          mes: "$_id.mes",
-          novosClientes: 1,
-        },
-      },
+      { $project: { _id: 0, mes: "$_id.mes", novosClientes: 1 } },
       { $sort: { mes: -1 } },
     ]);
     res.json(resultado);
@@ -236,16 +299,16 @@ exports.clientesPorMes = async (req, res) => {
   }
 };
 
+// (opcional)
 exports.mediaProdutosPorEntrega = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+
     const resultado = await Entrega.aggregate([
-      {
-        $project: {
-          totalProdutosEntrega: {
-            $sum: "$produtos.quantidade",
-          },
-        },
-      },
+      { $match: match },
+      { $project: { totalProdutosEntrega: { $sum: "$produtos.quantidade" } } },
       {
         $group: {
           _id: null,
@@ -269,11 +332,7 @@ exports.mediaProdutosPorEntrega = async (req, res) => {
       },
     ]);
     res.json(
-      resultado[0] || {
-        totalEntregas: 0,
-        totalProdutos: 0,
-        mediaPorEntrega: 0,
-      }
+      resultado[0] || { totalEntregas: 0, totalProdutos: 0, mediaPorEntrega: 0 }
     );
   } catch (erro) {
     res
@@ -282,94 +341,87 @@ exports.mediaProdutosPorEntrega = async (req, res) => {
   }
 };
 
+// /analitico/faturamento-mensal?padaria=...
+// retorna: [{ mes: '2025-08', valorTotal: 123.45 }, ...]
 exports.faturamentoMensal = async (req, res) => {
   try {
-    const resultado = await Entrega.aggregate([
+    const padariaId = getPadariaFromReq(req);
+    if (!padariaId) return res.json([]);
+
+    const bruto = await Entrega.aggregate([
       {
         $match: {
           "pagamentos.0": { $exists: true },
-          padaria: new mongoose.Types.ObjectId(req.usuario.padaria),
+          padaria: toObjectIdIfValid(padariaId),
         },
       },
       { $unwind: "$pagamentos" },
       {
         $group: {
-          _id: {
-            $dateToString: { format: "%Y-%m", date: "$pagamentos.data" },
-          },
+          _id: { $dateToString: { format: "%Y-%m", date: "$pagamentos.data" } },
           totalPago: { $sum: "$pagamentos.valor" },
-          entregasPagas: { $addToSet: "$_id" },
         },
       },
-      {
-        $project: {
-          _id: 0,
-          mes: "$_id",
-          totalPago: 1,
-          entregasPagas: { $size: "$entregasPagas" },
-          mediaPorEntrega: {
-            $cond: [
-              { $eq: [{ $size: "$entregasPagas" }, 0] },
-              0,
-              { $divide: ["$totalPago", { $size: "$entregasPagas" }] },
-            ],
-          },
-        },
-      },
-      { $sort: { mes: -1 } },
+      { $sort: { _id: -1 } },
     ]);
-    res.json(resultado);
+
+    const saida = bruto.map((r) => ({ mes: r._id, valorTotal: r.totalPago }));
+    res.json(saida);
   } catch (erro) {
     res.status(500).json({ erro: "Erro ao calcular faturamento mensal." });
   }
 };
 
+// /analitico/resumo-financeiro?padaria=...
+// retorna: { totalRecebido, totalPendente, clientesPagantes }
 exports.resumoFinanceiro = async (req, res) => {
   try {
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-    const amanha = new Date(hoje);
-    amanha.setDate(hoje.getDate() + 1);
+    const padariaId = getPadariaFromReq(req);
+    if (!padariaId)
+      return res.json({
+        totalRecebido: 0,
+        totalPendente: 0,
+        clientesPagantes: 0,
+      });
 
-    const entregasDoDia = await Entrega.find({
-      padaria: req.usuario.padaria,
-      createdAt: { $gte: hoje, $lt: amanha },
+    const { ini, fim } = hojeRange();
+
+    // pega entregas do dia da padaria
+    const entregas = await Entrega.find({
+      padaria: toObjectIdIfValid(padariaId),
+      createdAt: { $gte: ini, $lt: fim },
+    }).lean();
+
+    let totalRecebido = 0;
+    let totalPendente = 0;
+    const clientesComPagamento = new Set();
+
+    for (const e of entregas) {
+      const esperado = sumProdutosEsperado(e);
+      const pago = sumPagamentos(e);
+      totalRecebido += pago;
+      const restante = Math.max(0, esperado - pago);
+      totalPendente += restante;
+      if (pago > 0 && e.cliente) clientesComPagamento.add(String(e.cliente));
+    }
+
+    res.json({
+      totalRecebido,
+      totalPendente,
+      clientesPagantes: clientesComPagamento.size,
     });
-
-    const total = entregasDoDia.length;
-    const pagas = entregasDoDia.filter((e) => e.pago).length;
-    const pendentes = total - pagas;
-
-    const totalRecebido = entregasDoDia.reduce((soma, entrega) => {
-      if (entrega.pagamentos?.length > 0) {
-        entrega.pagamentos.forEach((p) => {
-          if (p.valor && !isNaN(p.valor)) {
-            soma += p.valor;
-          }
-        });
-      }
-      return soma;
-    }, 0);
-
-    res.json({ total, pagas, pendentes, totalRecebido });
   } catch (erro) {
     res.status(500).json({ erro: "Erro ao gerar resumo financeiro." });
   }
 };
 
-exports.entregasPorPadaria = async (req, res) => {
+// (opcional / não usado no front atual)
+exports.entregasPorPadaria = async (_req, res) => {
   try {
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-    const amanha = new Date(hoje);
-    amanha.setDate(hoje.getDate() + 1);
+    const { ini, fim } = hojeRange();
 
     const resultado = await Entrega.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: hoje, $lt: amanha },
-        },
-      },
+      { $match: { createdAt: { $gte: ini, $lt: fim } } },
       {
         $lookup: {
           from: "padarias",
@@ -394,8 +446,8 @@ exports.entregasPorPadaria = async (req, res) => {
                     $cond: [
                       {
                         $and: [
-                          { $gte: ["$$p.data", hoje] },
-                          { $lt: ["$$p.data", amanha] },
+                          { $gte: ["$$p.data", ini] },
+                          { $lt: ["$$p.data", fim] },
                         ],
                       },
                       "$$p.valor",
@@ -407,9 +459,7 @@ exports.entregasPorPadaria = async (req, res) => {
             },
           },
           totalPendenteHoje: {
-            $sum: {
-              $cond: [{ $eq: ["$pago", false] }, 1, 0],
-            },
+            $sum: { $cond: [{ $eq: ["$pago", false] }, 1, 0] },
           },
         },
       },
@@ -422,52 +472,44 @@ exports.entregasPorPadaria = async (req, res) => {
   }
 };
 
+// /analitico/entregas-por-dia-da-semana?padaria=...
+// retorno compatível com <XAxis dataKey="_id" />
 exports.entregasPorDiaDaSemana = async (req, res) => {
   try {
-    const pipeline = [
-      {
-        $match: {
-          padaria: req.usuario.padaria,
-        },
-      },
-      {
-        $addFields: {
-          diaSemana: { $dayOfWeek: "$createdAt" },
-        },
-      },
-      {
-        $group: {
-          _id: "$diaSemana",
-          total: { $sum: 1 },
-        },
-      },
-    ];
+    const padariaId = getPadariaFromReq(req);
+    const match = {};
+    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
 
-    const resultados = await Entrega.aggregate(pipeline);
+    const resultados = await Entrega.aggregate([
+      { $match: match },
+      { $addFields: { diaSemana: { $dayOfWeek: "$createdAt" } } }, // 1=Dom ... 7=Sáb
+      { $group: { _id: "$diaSemana", total: { $sum: 1 } } },
+    ]);
 
-    const dias = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-    const dadosOrdenados = Array(7)
-      .fill(0)
-      .map((_, i) => {
-        const item = resultados.find((r) => r._id === i + 1);
-        return { dia: dias[i], total: item ? item.total : 0 };
-      });
+    const labels = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+    const dados = Array.from({ length: 7 }, (_, i) => {
+      const item = resultados.find((r) => r._id === i + 1);
+      return { _id: labels[i], total: item ? item.total : 0 };
+    });
 
-    res.json(dadosOrdenados);
+    res.json(dados);
   } catch (error) {
     res.status(500).json({ mensagem: "Erro na análise", erro: error.message });
   }
 };
 
+// /analitico/listar-entregas-do-dia (opcional)
 exports.listarEntregasDoDia = async (req, res) => {
   try {
-    const agora = new Date();
-    const inicioDoDia = new Date(agora.setHours(0, 0, 0, 0));
-    const fimDoDia = new Date(agora.setHours(23, 59, 59, 999));
+    const padariaId = getPadariaFromReq(req);
+    if (!padariaId)
+      return res.json({ entregasConcluidas: [], entregasPendentes: [] });
+
+    const { ini, fim } = hojeRange();
 
     const entregas = await Entrega.find({
-      createdAt: { $gte: inicioDoDia, $lt: fimDoDia },
-      padaria: req.usuario.padaria,
+      padaria: toObjectIdIfValid(padariaId),
+      createdAt: { $gte: ini, $lt: fim },
     }).populate("entregador", "nome");
 
     const entregasConcluidas = [];
@@ -484,18 +526,10 @@ exports.listarEntregasDoDia = async (req, res) => {
         pago: entrega.pago,
         horaEntrega: entrega.updatedAt,
       };
-
-      if (entrega.entregue) {
-        entregasConcluidas.push(dados);
-      } else {
-        entregasPendentes.push(dados);
-      }
+      (entrega.entregue ? entregasConcluidas : entregasPendentes).push(dados);
     });
 
-    res.status(200).json({
-      entregasConcluidas,
-      entregasPendentes,
-    });
+    res.status(200).json({ entregasConcluidas, entregasPendentes });
   } catch (error) {
     res.status(500).json({
       erro: "Erro ao buscar entregas do dia",
@@ -504,11 +538,15 @@ exports.listarEntregasDoDia = async (req, res) => {
   }
 };
 
+// /analitico/localizacao-entregadores
 exports.obterLocalizacaoEntregadores = async (req, res) => {
   try {
+    const padariaId = getPadariaFromReq(req);
+    if (!padariaId) return res.json([]);
+
     const entregadores = await Usuario.find({
       role: "entregador",
-      padaria: req.usuario.padaria,
+      padaria: toObjectIdIfValid(padariaId),
       localizacaoAtual: { $ne: null },
     }).select("nome localizacaoAtual");
 
@@ -519,97 +557,115 @@ exports.obterLocalizacaoEntregadores = async (req, res) => {
       .json({ erro: "Erro ao buscar localização dos entregadores" });
   }
 };
-exports.analisarPrevisaoEntregas = async (req, res) => {
+
+// /analitico/entregas-tempo-real?padaria=...
+exports.entregasTempoReal = async (req, res) => {
   try {
-    const agora = new Date();
-    const inicioDoDia = new Date(agora.setHours(0, 0, 0, 0));
-    const fimDoDia = new Date(agora.setHours(23, 59, 59, 999));
+    const padariaId = getPadariaFromReq(req);
+    if (!padariaId) return res.json([]);
 
-    const entregas = await Entrega.find({
-      createdAt: { $gte: inicioDoDia, $lt: fimDoDia },
-      padaria: req.usuario.padaria,
-    }).populate("entregador", "nome");
+    const { ini, fim } = hojeRange();
 
-    const resultado = entregas.map((entrega) => {
-      const horaPrevista = entrega.horaPrevista;
-      const horaEntrega = entrega.entregue ? entrega.updatedAt : null;
+    const entregasDeHoje = await Entrega.find({
+      padaria: toObjectIdIfValid(padariaId),
+      createdAt: { $gte: ini, $lt: fim },
+    }).lean();
 
-      let status = "Pendente";
-
-      if (entrega.entregue && horaPrevista && horaEntrega) {
-        status = horaEntrega > horaPrevista ? "Atrasada" : "No horário";
-      }
-
-      return {
-        cliente: entrega.cliente,
-        endereco: entrega.endereco,
-        entregador: entrega.entregador?.nome || "N/A",
-        horaPrevista,
-        horaEntrega,
-        status,
-      };
-    });
-
-    res.status(200).json(resultado);
-  } catch (error) {
-    res.status(500).json({
-      erro: "Erro ao analisar entregas previstas",
-      detalhes: error.message,
-    });
-  }
-};
-exports.listarEntregasAtrasadas = async (req, res) => {
-  try {
-    const agora = new Date();
-
-    const entregas = await Entrega.find({
-      padaria: req.usuario.padaria,
-      entregue: false,
-      horaPrevista: { $ne: null },
-    }).select("cliente endereco horaPrevista entregador");
-
-    const entregasNoHorario = [];
-    const entregasAtrasadas = [];
-
-    entregas.forEach((entrega) => {
-      const dados = {
-        cliente: entrega.cliente,
-        endereco: entrega.endereco,
-        horaPrevista: entrega.horaPrevista,
-        entregador: entrega.entregador,
-      };
-
-      if (entrega.horaPrevista <= agora) {
-        entregasAtrasadas.push(dados);
-      } else {
-        entregasNoHorario.push(dados);
-      }
-    });
-
-    res.json({ entregasNoHorario, entregasAtrasadas });
+    res.json(entregasDeHoje);
   } catch (erro) {
-    console.error("Erro ao buscar entregas atrasadas:", erro);
-    res.status(500).json({ erro: "Erro ao buscar entregas atrasadas." });
+    console.error("Erro ao buscar entregas tempo real:", erro);
+    res.status(500).json({ erro: "Erro interno ao buscar entregas." });
   }
 };
+
+// /analitico/pagamentos (com filtros)
+exports.pagamentosDetalhados = async (req, res) => {
+  try {
+    const { dataInicial, dataFinal, forma } = req.query;
+
+    const filtros = {
+      "pagamentos.0": { $exists: true },
+      padaria: toObjectIdIfValid(getPadariaFromReq(req) || req.usuario.padaria),
+    };
+
+    if (dataInicial && dataFinal) {
+      filtros["pagamentos.data"] = {
+        $gte: new Date(dataInicial),
+        $lte: new Date(dataFinal),
+      };
+    }
+
+    // filtro precoce por forma (opcional)
+    if (forma && forma !== "todas") {
+      filtros["pagamentos.forma"] =
+        forma === "dinheiro" ? "não informado" : forma;
+    }
+
+    const entregas = await Entrega.find(filtros).populate("entregador");
+
+    const pagamentos = [];
+    const clientesSet = new Set();
+    let totalRecebido = 0;
+
+    for (const entrega of entregas) {
+      for (const pagamento of entrega.pagamentos || []) {
+        const formaDoPagamento =
+          pagamento.forma === "não informado" ? "dinheiro" : pagamento.forma;
+
+        // filtro tardio por forma (caso o precoce não pegue todos)
+        if (forma && forma !== "todas" && formaDoPagamento !== forma) continue;
+
+        pagamentos.push({
+          _id: pagamento._id,
+          cliente: entrega.cliente,
+          entregador: entrega.entregador?.nome || "Desconhecido",
+          valor: Number(pagamento.valor) || 0,
+          forma: formaDoPagamento,
+          data: pagamento.data,
+        });
+
+        totalRecebido += Number(pagamento.valor) || 0;
+        if (entrega.cliente) clientesSet.add(String(entrega.cliente));
+      }
+    }
+
+    res.status(200).json({
+      pagamentos,
+      totalRecebido,
+      totalPendente: 0,
+      clientesPagantes: clientesSet.size,
+    });
+  } catch (erro) {
+    console.error(erro);
+    res.status(500).json({ mensagem: "Erro ao buscar pagamentos detalhados" });
+  }
+};
+
+// /analitico/notificacoes-recentes
 exports.notificacoesRecentes = async (req, res) => {
   try {
-    const agora = new Date();
-    const inicioDoDia = new Date(agora.setHours(0, 0, 0, 0));
-    const fimDoDia = new Date(agora.setHours(23, 59, 59, 999));
+    const padariaId = getPadariaFromReq(req) || req.usuario.padaria;
+    if (!padariaId) return res.json({ eventos: [] });
+
+    const { ini, fim } = hojeRange();
 
     const entregas = await Entrega.find({
-      padaria: req.usuario.padaria,
-      updatedAt: { $gte: inicioDoDia, $lte: fimDoDia },
+      padaria: toObjectIdIfValid(padariaId),
+      updatedAt: { $gte: ini, $lte: fim },
     })
       .sort({ updatedAt: -1 })
-      .limit(20);
+      .limit(20)
+      .lean();
 
     const eventos = entregas.map((entrega) => {
       let tipo = "Atualização";
-      if (entrega.problemas && entrega.problemas.length > 0) tipo = "Problema";
+      if (Array.isArray(entrega.problemas) && entrega.problemas.length > 0)
+        tipo = "Problema";
       else if (entrega.entregue) tipo = "Entrega realizada";
-      else if (entrega.pagamentos && entrega.pagamentos.length > 0)
+      else if (
+        Array.isArray(entrega.pagamentos) &&
+        entrega.pagamentos.length > 0
+      )
         tipo = "Pagamento";
 
       return {
@@ -626,90 +682,5 @@ exports.notificacoesRecentes = async (req, res) => {
       erro: "Erro ao buscar notificações recentes",
       detalhes: erro.message,
     });
-  }
-};
-exports.entregasTempoReal = async (req, res) => {
-  try {
-    const padariaId = req.query.padaria || req.usuario.padaria;
-
-    if (!padariaId) {
-      return res.status(400).json({ erro: "Padaria não especificada." });
-    }
-
-    const entregasDeHoje = await Entrega.find({
-      padaria: padariaId,
-      data: { $gte: new Date().setHours(0, 0, 0, 0) },
-    });
-
-    res.json(entregasDeHoje);
-  } catch (erro) {
-    console.error("Erro ao buscar entregas tempo real:", erro);
-    res.status(500).json({ erro: "Erro interno ao buscar entregas." });
-  }
-};
-exports.pagamentosDetalhados = async (req, res) => {
-  try {
-    const { dataInicial, dataFinal, forma } = req.query;
-
-    const filtros = {
-      "pagamentos.0": { $exists: true },
-      padaria: req.usuario.padaria,
-    };
-
-    if (dataInicial && dataFinal) {
-      filtros["pagamentos.data"] = {
-        $gte: new Date(dataInicial),
-        $lte: new Date(dataFinal),
-      };
-    }
-
-    // Esse filtro age antes de carregar os dados do banco
-    if (forma && forma !== "todas") {
-      if (forma === "dinheiro") {
-        filtros["pagamentos.forma"] = "não informado";
-      } else {
-        filtros["pagamentos.forma"] = forma;
-      }
-    }
-
-    const entregas = await Entrega.find(filtros).populate("entregador");
-
-    const pagamentos = [];
-    const clientesSet = new Set();
-    let totalRecebido = 0;
-
-    entregas.forEach((entrega) => {
-      entrega.pagamentos.forEach((pagamento) => {
-        const formaDoPagamento =
-          pagamento.forma === "não informado" ? "dinheiro" : pagamento.forma;
-
-        // Filtro adicional no frontend, se necessário
-        if (forma && forma !== "todas" && formaDoPagamento !== forma) return;
-
-        pagamentos.push({
-          _id: pagamento._id, // 🔹 Aqui
-          cliente: entrega.cliente,
-          entregador: entrega.entregador?.nome || "Desconhecido",
-          valor: pagamento.valor,
-          forma: formaDoPagamento,
-          data: pagamento.data,
-        });
-
-        totalRecebido += pagamento.valor;
-        clientesSet.add(entrega.cliente);
-      });
-    });
-
-    const resposta = {
-      pagamentos,
-      totalRecebido,
-      totalPendente: 0, // ainda não implementado
-      clientesPagantes: clientesSet.size,
-    };
-
-    res.status(200).json(resposta);
-  } catch (erro) {
-    console.error(erro);
-    res.status(500).json({ mensagem: "Erro ao buscar pagamentos detalhados" });
   }
 };
