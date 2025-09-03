@@ -1,46 +1,60 @@
 require("dotenv").config();
+
 const express = require("express");
-const logger = require("./logs/utils/logger");
 const app = express();
+
+const logger = require("./logs/utils/logger");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const cors = require("cors");
 const cron = require("node-cron");
+const rateLimit = require("express-rate-limit");
 
-const { gerarEntregasDoDia } = require("./controllers/gerarEntregasDiarias"); // ✅ apenas uma vez
-// 🔹 Execução automática diária às 00:00
-cron.schedule("0 0 * * *", () => {
-  console.log(
-    `[${new Date().toISOString()}] Iniciando geração automática das entregas do dia...`
-  );
-  gerarEntregasDoDia();
-});
+// ===== Banco =====
+const conectarBanco = require("./config/database");
+conectarBanco();
 
-logger.info("Servidor iniciado");
-logger.error("Teste de erro");
+// ===== CORS =====
+const allowedOrigins = ["http://localhost:5173", "http://127.0.0.1:5173"];
 
-// -------- CORS (Express 5, sem app.options) --------
 const corsOptions = {
-  origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: false, // você guarda tokens no localStorage, não usa cookies
-  maxAge: 600,
+  credentials: false,
 };
+
 app.use(cors(corsOptions));
-// responde a qualquer preflight logo aqui
+
+// Preflight universal (Express 5)
 app.use((req, res, next) => {
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  if (req.method === "OPTIONS") {
+    const origin = req.headers.origin;
+    if (!origin || allowedOrigins.includes(origin)) {
+      res.header("Access-Control-Allow-Origin", origin || allowedOrigins[0]);
+      res.header("Vary", "Origin");
+      res.header(
+        "Access-Control-Allow-Methods",
+        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+      );
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      return res.sendStatus(204);
+    }
+  }
   next();
 });
-// ---------------------------------------------------
 
+// ===== Middlewares =====
+app.use(express.json());
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(morgan("dev"));
-app.use(helmet());
-app.use(express.json()); // ESSENCIAL p/ POST/PUT JSON
 
-// 3) Só depois o rate limit
-const rateLimit = require("express-rate-limit");
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 1000,
@@ -50,57 +64,65 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-const conectarBanco = require("./config/database");
-conectarBanco();
-gerarEntregasDoDia(); // chamada manual forçada
+// ===== CRON (geração diária às 00:00) =====
+// Se NÃO tiver esse controller ainda, você pode comentar as 3 linhas abaixo.
+let gerarEntregasDoDia = null;
+try {
+  ({ gerarEntregasDoDia } = require("./controllers/gerarEntregasDiarias"));
+} catch (e) {
+  logger.warn(
+    "Controller gerarEntregasDiarias não encontrado. CRON ficará inativo."
+  );
+}
 
-const entregasRoutes = require("./routes/entregas");
-app.use("/entregas", entregasRoutes);
+// Ativa o CRON somente se o controller existir
+if (typeof gerarEntregasDoDia === "function") {
+  // Executa todo dia à 00:00 no horário do servidor. Se quiser timezone:
+  // cron.schedule("0 0 * * *", job, { timezone: "America/Sao_Paulo" })
+  cron.schedule("0 0 * * *", () => {
+    try {
+      logger.info(
+        `[${new Date().toISOString()}] Disparando geração automática das entregas do dia...`
+      );
+      Promise.resolve(gerarEntregasDoDia()).catch((e) =>
+        logger.error("Erro no CRON gerarEntregasDoDia:", e)
+      );
+    } catch (e) {
+      logger.error("Falha ao agendar job do CRON:", e);
+    }
+  });
 
-app.get("/", (req, res) => {
-  res.send("Olá, Sistema de Entregas da Padaria!");
-});
+  // (Opcional) Chamar uma vez no boot
+  Promise.resolve(gerarEntregasDoDia()).catch((e) =>
+    logger.error("Erro ao gerar entregas no boot:", e)
+  );
+}
 
-const PORT = process.env.PORT || 3000;
+// ===== Rotas =====
+app.get("/", (req, res) => res.send("Olá, Sistema de Entregas da Padaria!"));
+
+app.use("/login", require("./routes/login"));
+app.use("/token", require("./routes/tokens"));
+
+app.use("/usuarios", require("./routes/usuarios"));
+app.use("/padarias", require("./routes/padarias"));
+app.use("/produtos", require("./routes/produtos"));
+app.use("/api/clientes", require("./routes/clientes")); // atenção: prefixo /api
+app.use("/entregas", require("./routes/entregas"));
+app.use("/entregas-avulsas", require("./routes/entregasAvulsas"));
+
+app.use("/rotas", require("./routes/rotas"));
+app.use("/rota-entregador", require("./routes/rotaEntregador"));
+
+app.use("/gerente", require("./routes/gerente"));
+app.use("/admin", require("./routes/admin"));
+// app.use("/analitico", require("./routes/analitico"));
+
+app.use("/teste-protegido", require("./routes/testeProtegido"));
+
+// ===== Start =====
+const PORT = process.env.PORT || 4001;
 app.listen(PORT, () => {
   logger.info(`Servidor rodando na porta ${PORT}`);
+  logger.info("Servidor iniciado");
 });
-
-const login = require("./routes/login");
-app.use("/login", login);
-
-const testeProtegido = require("./routes/testeProtegido");
-app.use("/teste-protegido", testeProtegido);
-
-const usuarios = require("./routes/usuarios");
-app.use("/usuarios", usuarios);
-
-const rotaEntregador = require("./routes/rotaEntregador");
-app.use("/rota-entregador", rotaEntregador);
-
-const gerenteRoutes = require("./routes/gerente");
-app.use("/gerente", gerenteRoutes);
-
-const rotasPadarias = require("./routes/padarias");
-app.use("/padarias", rotasPadarias);
-
-const adminRoutes = require("./routes/admin");
-app.use("/admin", adminRoutes);
-
-const tokenRoutes = require("./routes/tokens");
-app.use("/token", tokenRoutes);
-
-const analiticoRoutes = require("./routes/analitico");
-app.use("/analitico", analiticoRoutes);
-
-const clientesRoutes = require("./routes/clientes");
-app.use("/api/clientes", clientesRoutes);
-
-const entregasAvulsasRoutes = require("./routes/entregasAvulsas");
-app.use("/entregas-avulsas", entregasAvulsasRoutes);
-
-const produtosRoutes = require("./routes/produtos");
-app.use("/produtos", produtosRoutes);
-
-const rotasRoutes = require("./routes/rotas");
-app.use("/rotas", rotasRoutes);

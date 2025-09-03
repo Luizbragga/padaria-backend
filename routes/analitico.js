@@ -1,38 +1,59 @@
-// dentro exports.entregasPorEntregador
-const match = {};
-// se admin/gerente passou ?padaria=... usamos; caso contrário, se for gerente, usamos req.usuario.padaria
-const padariaParam = req.query.padaria || req.usuario?.padaria;
-if (padariaParam) {
-  match.padaria = new mongoose.Types.ObjectId(padariaParam);
-}
+// routes/analitico.js
+const express = require("express");
+const router = express.Router();
 
-const resultado = await Entrega.aggregate([
-  { $match: match }, // <--- adiciona esta linha
-  {
-    $group: {
-      _id: "$entregador",
-      totalEntregas: { $sum: 1 },
-      entregues: { $sum: { $cond: ["$entregue", 1, 0] } },
-      pendentes: { $sum: { $cond: ["$entregue", 0, 1] } },
-    },
-  },
-  {
-    $lookup: {
-      from: "usuarios",
-      localField: "_id",
-      foreignField: "_id",
-      as: "entregadorInfo",
-    },
-  },
-  { $unwind: "$entregadorInfo" },
-  {
-    $project: {
-      _id: 0,
-      entregador: "$entregadorInfo.nome",
-      totalEntregas: 1,
-      entregues: 1,
-      pendentes: 1,
-    },
-  },
-  { $sort: { totalEntregas: -1 } },
-]);
+const analitico = require("../controllers/analiticoController");
+const autenticar = require("../middlewares/autenticacao");
+const autorizar = require("../middlewares/autorizar");
+
+// Autenticação para todas as rotas deste módulo
+router.use(autenticar);
+
+// Admin/Gerente por padrão
+const podeVer = autorizar("admin", "gerente");
+
+// === Mapeamento 1:1 com os exports do controller ===
+router.get("/entregas-do-dia", podeVer, analitico.listarEntregasDoDia);
+router.get("/entregas-por-dia", podeVer, analitico.entregasPorDia);
+router.get("/inadimplencia", podeVer, analitico.inadimplencia);
+router.get(
+  "/produtos-mais-entregues",
+  podeVer,
+  analitico.produtosMaisEntregues
+);
+router.get(
+  "/entregas-por-entregador",
+  podeVer,
+  analitico.entregasPorEntregador
+);
+router.get("/problemas-por-tipo", podeVer, analitico.problemasPorTipo);
+router.get("/problemas-por-cliente", podeVer, analitico.problemasPorCliente);
+router.get("/formas-de-pagamento", podeVer, analitico.formasDePagamento);
+router.get("/clientes-por-mes", podeVer, analitico.clientesPorMes);
+router.get(
+  "/media-produtos-por-entrega",
+  podeVer,
+  analitico.mediaProdutosPorEntrega
+);
+router.get("/faturamento-mensal", podeVer, analitico.faturamentoMensal);
+router.get("/resumo-financeiro", podeVer, analitico.resumoFinanceiro);
+
+// Somente admin
+router.get("/por-padaria", autorizar("admin"), analitico.entregasPorPadaria);
+
+// Extras presentes no controller
+router.get(
+  "/entregas-por-dia-da-semana",
+  podeVer,
+  analitico.entregasPorDiaDaSemana
+);
+router.get(
+  "/localizacao-entregadores",
+  podeVer,
+  analitico.obterLocalizacaoEntregadores
+);
+router.get("/entregas-tempo-real", podeVer, analitico.entregasTempoReal);
+router.get("/pagamentos", podeVer, analitico.pagamentosDetalhados);
+router.get("/notificacoes-recentes", podeVer, analitico.notificacoesRecentes);
+
+module.exports = router;

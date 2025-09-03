@@ -1,4 +1,4 @@
-// services/geradorEntregasDiarias.js (ou onde você já mantém essa função)
+// controllers/gerarEntregasDiarias.js
 const Cliente = require("../models/Cliente");
 const Entrega = require("../models/Entrega");
 const Produto = require("../models/Produto");
@@ -17,16 +17,16 @@ function diaDaSemanaAtual() {
   return dias[new Date().getDay()];
 }
 
-// retorna o início/fim do dia em HORÁRIO LOCAL (00:00:00.000 — 23:59:59.999)
+// Retorna início/fim do dia em HORÁRIO LOCAL (00:00 — 24:00)
 function intervaloHojeLocal() {
   const ini = new Date();
-  ini.setHours(0, 0, 0, 0); // Date válido
+  ini.setHours(0, 0, 0, 0);
   const fim = new Date(ini);
   fim.setDate(ini.getDate() + 1);
   return { ini, fim };
 }
 
-exports.gerarEntregasDoDia = async () => {
+async function gerarEntregasDoDia() {
   const startedAt = new Date();
   const dataExecucao = startedAt.toISOString();
   const diaSemana = diaDaSemanaAtual();
@@ -37,7 +37,7 @@ exports.gerarEntregasDoDia = async () => {
   );
 
   try {
-    // 1) Busca clientes ativos que têm padrão no dia da semana
+    // 1) Clientes ativos com padrão hoje
     const clientes = await Cliente.find({
       ativo: true,
       [`padraoSemanal.${diaSemana}`]: { $exists: true, $ne: [] },
@@ -52,7 +52,7 @@ exports.gerarEntregasDoDia = async () => {
       return;
     }
 
-    // 2) Filtra clientes sem coordenadas (obrigatório)
+    // 2) Filtra clientes sem coordenadas válidas
     const clientesValidos = clientes.filter((c) => {
       const lat = c?.location?.lat;
       const lng = c?.location?.lng;
@@ -76,7 +76,7 @@ exports.gerarEntregasDoDia = async () => {
       return;
     }
 
-    // 3) Carrega IDs de produtos que serão usados hoje (para evitar N+1)
+    // 3) Carrega produtos do dia (evita N+1)
     const todosItensDoDia = clientesValidos.flatMap(
       (c) => c.padraoSemanal?.[diaSemana] || []
     );
@@ -96,31 +96,29 @@ exports.gerarEntregasDoDia = async () => {
 
     let criadas = 0;
 
-    // 4) Para cada cliente: verificar se já tem entrega hoje; senão, criar
+    // 4) Para cada cliente: evita duplicata e cria a entrega
     for (const cliente of clientesValidos) {
-      // 4.1) Já existe uma entrega para este cliente hoje?
+      // 4.1) Já existe entrega hoje para este cliente?
       const jaExiste = await Entrega.exists({
         cliente: cliente._id,
         createdAt: { $gte: ini, $lt: fim },
       });
-
       if (jaExiste) {
         logger.warn(
-          `[${dataExecucao}] Entrega já existente hoje para cliente ${cliente.nome} (${cliente._id}).`
+          `[${dataExecucao}] Entrega já existente hoje para ${cliente.nome} (${cliente._id}).`
         );
         continue;
       }
 
-      // 4.2) Montar itens do pedido (nome, preço unitário, subtotal)
+      // 4.2) Monta itens
       const itensDia = cliente.padraoSemanal?.[diaSemana] || [];
       const produtosDetalhados = [];
-
       for (const item of itensDia) {
         const pid = String(item.produto || "");
         const meta = mapaProdutos.get(pid);
         if (!meta) {
           logger.warn(
-            `[${dataExecucao}] Produto não encontrado/ativo para ID: ${pid} (cliente: ${cliente.nome}). Pulando item.`
+            `[${dataExecucao}] Produto ausente/ativo p/ ID: ${pid} (cliente: ${cliente.nome}). Pulando item.`
           );
           continue;
         }
@@ -147,16 +145,17 @@ exports.gerarEntregasDoDia = async () => {
 
       // 4.3) Cria a entrega (uma por cliente/dia com todos os itens)
       await Entrega.create({
-        cliente: cliente._id,
+        cliente: cliente._id, // ⚠️ seu modelo aceita ObjectId ou string; aqui padronizamos ObjectId
         endereco: cliente.endereco,
-        entregador: null, // será atribuído ao assumir rota
+        entregador: null, // atribuído ao assumir a rota
         produtos: produtosDetalhados,
         entregue: false,
         pago: false,
         pagamentos: [],
         problemas: [],
         padaria: cliente.padaria,
-        location: cliente.location, // obrigatório e já validado acima
+        location: cliente.location, // já validado
+        ativa: true,
       });
 
       criadas += 1;
@@ -170,4 +169,6 @@ exports.gerarEntregasDoDia = async () => {
       `[${dataExecucao}] ❌ Erro ao gerar entregas: ${erro.message}`
     );
   }
-};
+}
+
+module.exports = { gerarEntregasDoDia };

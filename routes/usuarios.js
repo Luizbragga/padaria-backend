@@ -27,36 +27,28 @@ router.put(
   autorizar("entregador"),
   async (req, res) => {
     try {
-      let { latitude, longitude } = req.body;
+      // aceita lat/lng OU latitude/longitude
+      let { lat, lng, latitude, longitude } = req.body;
+      lat = Number(lat ?? latitude);
+      lng = Number(lng ?? longitude);
 
-      if (latitude === undefined || longitude === undefined) {
-        return res
-          .status(400)
-          .json({ erro: "Latitude e longitude são obrigatórios." });
-      }
-
-      latitude = Number(latitude);
-      longitude = Number(longitude);
-
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         return res
           .status(400)
           .json({ erro: "Latitude e longitude devem ser numéricos." });
       }
 
       await Usuario.findByIdAndUpdate(req.usuario.id, {
-        localizacaoAtual: { latitude, longitude },
+        localizacaoAtual: { lat, lng, updatedAt: new Date() },
       });
 
       res.json({ mensagem: "Localização atualizada com sucesso." });
     } catch (error) {
       console.error("Erro ao atualizar localização:", error);
-      res
-        .status(500)
-        .json({
-          erro: "Erro ao atualizar localização",
-          detalhes: error.message,
-        });
+      res.status(500).json({
+        erro: "Erro ao atualizar localização",
+        detalhes: error.message,
+      });
     }
   }
 );
