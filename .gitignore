@@ -1,7 +1,46 @@
-
-# Local env, logs e caches
-.env
-logs/
-*.log
-**/yarn-error.log
+# Dependências
 node_modules/
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build / dist
+dist/
+build/
+.vite/
+.cache/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# Cobertura de testes
+coverage/
+*.lcov
+.nyc_output
+
+# Outras caches
+.eslintcache
+.stylelintcache
+.parcel-cache
+
+# Lockfile errado dentro de node_modules (às vezes aparece)
+node_modules/.package-lock.json
