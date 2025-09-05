@@ -187,11 +187,9 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
           STALE_MINUTES * 60 * 1000;
 
       if (!isStale) {
-        return res
-          .status(409)
-          .json({
-            erro: "Rota já em execução, por favor selecione outra rota.",
-          });
+        return res.status(409).json({
+          erro: "Rota já em execução, por favor selecione outra rota.",
+        });
       }
 
       // liberar lock stale (guardando dono anterior)
@@ -234,13 +232,17 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
           padaria,
           cliente: { $in: clienteIds },
           entregue: { $in: [false, null] },
-          $or: [
-            { createdAt: { $gte: ini, $lt: fim } },
-            { dataEntrega: { $gte: ini, $lt: fim } },
-            { data: { $gte: ini, $lt: fim } },
-            { horaPrevista: { $gte: ini, $lt: fim } },
+          $and: [
+            {
+              $or: [
+                { createdAt: { $gte: ini, $lt: fim } },
+                { dataEntrega: { $gte: ini, $lt: fim } },
+                { data: { $gte: ini, $lt: fim } },
+                { horaPrevista: { $gte: ini, $lt: fim } },
+              ],
+            },
+            { $or: orOwners }, // <= (null | usuário atual | staleHolderId)
           ],
-          $or: orOwners,
         },
         { $set: { entregador: usuarioId } }
       );
@@ -303,15 +305,19 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
           padaria,
           cliente: { $in: clienteIds },
           entregue: { $in: [false, null] },
-          entregador: usuarioId,
-          $or: [
-            { createdAt: { $gte: ini, $lt: fim } },
-            { dataEntrega: { $gte: ini, $lt: fim } },
-            { data: { $gte: ini, $lt: fim } },
-            { horaPrevista: { $gte: ini, $lt: fim } },
+          $and: [
+            {
+              $or: [
+                { createdAt: { $gte: ini, $lt: fim } },
+                { dataEntrega: { $gte: ini, $lt: fim } },
+                { data: { $gte: ini, $lt: fim } },
+                { horaPrevista: { $gte: ini, $lt: fim } },
+              ],
+            },
+            { $or: orOwners }, // <= (null | usuário atual | staleHolderId)
           ],
         },
-        { $set: { entregador: null } }
+        { $set: { entregador: usuarioId } }
       );
     }
 

@@ -44,3 +44,9 @@ coverage/
 
 # Lockfile errado dentro de node_modules (às vezes aparece)
 node_modules/.package-lock.json
+node_modules/
+.env
+logs/
+coverage/
+.DS_Store
+

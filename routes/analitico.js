@@ -6,54 +6,71 @@ const analitico = require("../controllers/analiticoController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 
-// Autenticação para todas as rotas deste módulo
+// healthcheck (opcional)
+router.get("/_ping", (req, res) => res.json({ ok: true }));
+
+// todas as rotas daqui exigem autenticação
 router.use(autenticar);
 
-// Admin/Gerente por padrão
+// admin ou gerente
 const podeVer = autorizar("admin", "gerente");
 
-// === Mapeamento 1:1 com os exports do controller ===
-router.get("/entregas-do-dia", podeVer, analitico.listarEntregasDoDia);
-router.get("/entregas-por-dia", podeVer, analitico.entregasPorDia);
-router.get("/inadimplencia", podeVer, analitico.inadimplencia);
+// helper: garante que o handler é função e dá erro legível se não for
+function ensureFn(name) {
+  const fn = analitico[name];
+  if (typeof fn !== "function") {
+    throw new TypeError(
+      `[analitico.routes] Handler "${name}" não é function (é ${typeof fn}).`
+    );
+  }
+  return fn;
+}
+
+/** === Rotas === */
+router.get("/a-receber", podeVer, ensureFn("aReceberMensal"));
+
+router.get("/entregas-do-dia", podeVer, ensureFn("listarEntregasDoDia"));
+router.get("/entregas-por-dia", podeVer, ensureFn("entregasPorDia"));
+router.get("/inadimplencia", podeVer, ensureFn("inadimplencia"));
 router.get(
   "/produtos-mais-entregues",
   podeVer,
-  analitico.produtosMaisEntregues
+  ensureFn("produtosMaisEntregues")
 );
 router.get(
   "/entregas-por-entregador",
   podeVer,
-  analitico.entregasPorEntregador
+  ensureFn("entregasPorEntregador")
 );
-router.get("/problemas-por-tipo", podeVer, analitico.problemasPorTipo);
-router.get("/problemas-por-cliente", podeVer, analitico.problemasPorCliente);
-router.get("/formas-de-pagamento", podeVer, analitico.formasDePagamento);
-router.get("/clientes-por-mes", podeVer, analitico.clientesPorMes);
+router.get("/problemas-por-tipo", podeVer, ensureFn("problemasPorTipo"));
+router.get("/problemas-por-cliente", podeVer, ensureFn("problemasPorCliente"));
+router.get("/formas-de-pagamento", podeVer, ensureFn("formasDePagamento"));
+router.get("/clientes-por-mes", podeVer, ensureFn("clientesPorMes"));
 router.get(
   "/media-produtos-por-entrega",
   podeVer,
-  analitico.mediaProdutosPorEntrega
+  ensureFn("mediaProdutosPorEntrega")
 );
-router.get("/faturamento-mensal", podeVer, analitico.faturamentoMensal);
-router.get("/resumo-financeiro", podeVer, analitico.resumoFinanceiro);
+router.get("/faturamento-mensal", podeVer, ensureFn("faturamentoMensal"));
+router.get("/resumo-financeiro", podeVer, ensureFn("resumoFinanceiro"));
 
-// Somente admin
-router.get("/por-padaria", autorizar("admin"), analitico.entregasPorPadaria);
+router.get("/por-padaria", autorizar("admin"), ensureFn("entregasPorPadaria"));
 
-// Extras presentes no controller
 router.get(
   "/entregas-por-dia-da-semana",
   podeVer,
-  analitico.entregasPorDiaDaSemana
+  ensureFn("entregasPorDiaDaSemana")
 );
 router.get(
   "/localizacao-entregadores",
   podeVer,
-  analitico.obterLocalizacaoEntregadores
+  ensureFn("obterLocalizacaoEntregadores")
 );
-router.get("/entregas-tempo-real", podeVer, analitico.entregasTempoReal);
-router.get("/pagamentos", podeVer, analitico.pagamentosDetalhados);
-router.get("/notificacoes-recentes", podeVer, analitico.notificacoesRecentes);
+router.get("/entregas-tempo-real", podeVer, ensureFn("entregasTempoReal"));
+router.get("/pagamentos", podeVer, ensureFn("pagamentosDetalhados"));
+router.get("/notificacoes-recentes", podeVer, ensureFn("notificacoesRecentes"));
+
+// Só mantenha esta se o controller tiver mesmo o handler:
+/// router.get("/avulsas", podeVer, ensureFn("avulsasDoMes"));
 
 module.exports = router;

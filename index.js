@@ -9,6 +9,8 @@ const morgan = require("morgan");
 const cors = require("cors");
 const cron = require("node-cron");
 const rateLimit = require("express-rate-limit");
+const analiticoRoutes = require("./routes/analitico");
+const devRoutes = require("./routes/dev");
 
 // ===== Banco =====
 const conectarBanco = require("./config/database");
@@ -110,10 +112,11 @@ app.use("/produtos", require("./routes/produtos"));
 app.use("/api/clientes", require("./routes/clientes")); // atenção: prefixo /api
 app.use("/entregas", require("./routes/entregas"));
 app.use("/entregas-avulsas", require("./routes/entregasAvulsas"));
-
+app.use("/dev", devRoutes);
 app.use("/rotas", require("./routes/rotas"));
 app.use("/rota-entregador", require("./routes/rotaEntregador"));
-
+app.use("/analitico", analiticoRoutes);
+app.use("/config", require("./routes/config"));
 app.use("/gerente", require("./routes/gerente"));
 app.use("/admin", require("./routes/admin"));
 // app.use("/analitico", require("./routes/analitico"));

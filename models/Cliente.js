@@ -64,8 +64,20 @@ const ClienteSchema = new mongoose.Schema(
       quinta: [PadraoSemanalSchema],
       sexta: [PadraoSemanalSchema],
       sabado: [PadraoSemanalSchema],
+
+      inicioCicloFaturamento: {
+        type: Date,
+        // por padrão: amanhã 00:00
+        default: function () {
+          const d = new Date();
+          d.setDate(d.getDate() + 1);
+          d.setHours(0, 0, 0, 0);
+          return d;
+        },
+      },
     },
   },
+
   { timestamps: true }
 );
 

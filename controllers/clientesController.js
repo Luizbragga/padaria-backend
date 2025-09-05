@@ -42,7 +42,15 @@ exports.criarCliente = async (req, res) => {
   try {
     assertAdmin(req);
 
-    const { nome, endereco, rota, padaria, location } = req.body;
+    const {
+      nome,
+      endereco,
+      rota,
+      padaria,
+      location,
+      padraoSemanal, // opcional
+      inicioCicloFaturamento, // opcional
+    } = req.body;
 
     if (!nome || !endereco || !rota || !padaria) {
       return res
@@ -73,12 +81,28 @@ exports.criarCliente = async (req, res) => {
         .json({ erro: "Já existe um cliente com esse nome nesta padaria." });
     }
 
+    // calcula a data de início do ciclo (fallback: amanhã às 00:00)
+    const startCycle = inicioCicloFaturamento
+      ? new Date(inicioCicloFaturamento)
+      : (() => {
+          const d = new Date();
+          d.setDate(d.getDate() + 1);
+          d.setHours(0, 0, 0, 0);
+          return d;
+        })();
+
+    if (isNaN(startCycle.getTime())) {
+      return res.status(400).json({ erro: "inicioCicloFaturamento inválido." });
+    }
+
     const novo = await Cliente.create({
       nome: nome.trim(),
       endereco: endereco.trim(),
       rota: rotaNorm,
       padaria: padariaId,
       location: loc, // obrigatório
+      inicioCicloFaturamento: startCycle,
+      ...(padraoSemanal ? { padraoSemanal } : {}),
     });
 
     res.status(201).json(novo);
@@ -141,11 +165,9 @@ exports.atualizarCliente = async (req, res) => {
       if (!padariaUser)
         return res.status(400).json({ erro: "Usuário sem padaria." });
       if (String(cliente.padaria) !== String(padariaUser)) {
-        return res
-          .status(403)
-          .json({
-            erro: "Gerente só pode editar clientes da própria padaria.",
-          });
+        return res.status(403).json({
+          erro: "Gerente só pode editar clientes da própria padaria.",
+        });
       }
       // gerente não pode trocar a padaria do cliente
       if (
@@ -185,6 +207,26 @@ exports.atualizarCliente = async (req, res) => {
       ensureHasValidLocation(loc);
       // mantém o existente
     }
+    // Admin pode alterar o início do ciclo de faturamento, se for necessário.
+    if (
+      role === "admin" &&
+      typeof req.body.inicioCicloFaturamento !== "undefined"
+    ) {
+      const d = new Date(req.body.inicioCicloFaturamento);
+      if (isNaN(d.getTime())) {
+        return res
+          .status(400)
+          .json({ erro: "inicioCicloFaturamento inválido." });
+      }
+      // normaliza pra 00:00 do dia informado
+      d.setHours(0, 0, 0, 0);
+      cliente.inicioCicloFaturamento = d;
+    }
+
+    // (opcional) Admin/gerente podem trocar o padrão semanal por aqui também
+    if (typeof req.body.padraoSemanal !== "undefined") {
+      cliente.padraoSemanal = req.body.padraoSemanal || {};
+    }
 
     const atualizado = await cliente.save();
     res.json(atualizado);
@@ -214,5 +256,113 @@ exports.deletarCliente = async (req, res) => {
     res
       .status(erro.status || 500)
       .json({ erro: erro.message || "Erro ao deletar cliente." });
+  }
+};
+// >>> em controllers/clientesController.js
+
+const popPaths = [
+  "padraoSemanal.domingo.produto",
+  "padraoSemanal.segunda.produto",
+  "padraoSemanal.terca.produto",
+  "padraoSemanal.quarta.produto",
+  "padraoSemanal.quinta.produto",
+  "padraoSemanal.sexta.produto",
+  "padraoSemanal.sabado.produto",
+].map((p) => ({ path: p, select: "nome preco" }));
+
+function normDia(lista = []) {
+  return lista.map((i) => {
+    const p = i.produto;
+    const preco = p && typeof p === "object" ? Number(p.preco) || 0 : 0;
+    const id = p && typeof p === "object" ? String(p._id) : String(p);
+    return {
+      produtoId: id,
+      produto: p?.nome ?? id,
+      preco,
+      quantidade: Number(i.quantidade) || 0,
+      subtotal: (Number(i.quantidade) || 0) * preco,
+    };
+  });
+}
+
+/** GET /api/clientes/:id/padrao-semanal */
+exports.padraoSemanalCliente = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ erro: "ID inválido." });
+    }
+
+    const cli = await Cliente.findById(id).populate(popPaths).lean();
+    if (!cli) return res.status(404).json({ erro: "Cliente não encontrado." });
+
+    // (opcional) bloquear gerente de ver cliente de outra padaria:
+    if (
+      req.usuario?.role === "gerente" &&
+      String(cli.padaria) !== String(req.usuario.padaria)
+    ) {
+      return res.status(403).json({
+        erro: "Gerente só pode consultar clientes da própria padaria.",
+      });
+    }
+
+    const out = {
+      clienteId: String(cli._id),
+      nome: cli.nome,
+      inicioCicloFaturamento: cli.inicioCicloFaturamento,
+      padraoSemanal: {
+        domingo: normDia(cli.padraoSemanal?.domingo),
+        segunda: normDia(cli.padraoSemanal?.segunda),
+        terca: normDia(cli.padraoSemanal?.terca),
+        quarta: normDia(cli.padraoSemanal?.quarta),
+        quinta: normDia(cli.padraoSemanal?.quinta),
+        sexta: normDia(cli.padraoSemanal?.sexta),
+        sabado: normDia(cli.padraoSemanal?.sabado),
+      },
+    };
+
+    return res.json(out);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ erro: "Falha ao buscar padrão semanal." });
+  }
+};
+
+/** GET /api/clientes/padrao-semanal?padaria=<id> */
+exports.padraoSemanalTodos = async (req, res) => {
+  try {
+    // admin pode passar ?padaria=; gerente usa a própria padaria
+    let padariaId =
+      req.usuario?.role === "admin" ? req.query.padaria : req.usuario?.padaria;
+
+    if (!padariaId || !mongoose.Types.ObjectId.isValid(padariaId)) {
+      return res.status(400).json({ erro: "Padaria não informada/ inválida." });
+    }
+
+    const clientes = await Cliente.find({ padaria: padariaId })
+      .sort({ nome: 1 })
+      .populate(popPaths)
+      .lean();
+
+    const out = clientes.map((cli) => ({
+      clienteId: String(cli._id),
+      nome: cli.nome,
+      inicioCicloFaturamento: cli.inicioCicloFaturamento,
+      padraoSemanal: {
+        domingo: normDia(cli.padraoSemanal?.domingo),
+        segunda: normDia(cli.padraoSemanal?.segunda),
+        terca: normDia(cli.padraoSemanal?.terca),
+        quarta: normDia(cli.padraoSemanal?.quarta),
+        quinta: normDia(cli.padraoSemanal?.quinta),
+        sexta: normDia(cli.padraoSemanal?.sexta),
+        sabado: normDia(cli.padraoSemanal?.sabado),
+      },
+    }));
+
+    return res.json(out);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ erro: "Falha ao listar padrões semanais." });
   }
 };

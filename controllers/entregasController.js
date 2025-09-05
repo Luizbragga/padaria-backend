@@ -336,6 +336,9 @@ exports.registrarPagamento = async (req, res) => {
       data: new Date(),
     });
     entrega.pago = true;
+    entrega.entregue = true; // ✅ pagamento conclui a entrega
+    if (!entrega.padaria) entrega.padaria = OID(padariaDoReq(req));
+    if (!entrega.entregador) entrega.entregador = OID(req.usuario.id);
 
     await entrega.save();
     res.json({ mensagem: "Pagamento registrado com sucesso", entrega });
@@ -567,11 +570,18 @@ exports.contarPorStatus = async (req, res) => {
 // controllers/entregasController.js (ADICIONE)
 exports.listarMinhasEntregas = async (req, res) => {
   try {
-    const Entrega = require("../models/Entrega");
+    const { id: usuarioId } = req.usuario;
+
+    // janela de "hoje"
+    const ini = new Date();
+    ini.setHours(0, 0, 0, 0);
+    const fim = new Date(ini);
+    fim.setDate(ini.getDate() + 1);
+
     const minhas = await Entrega.find({
-      entregador: req.usuario.id,
-      // Se quiser mostrar tudo (inclusive feitas), remova a linha abaixo:
-      // entregue: false,
+      entregador: usuarioId,
+      createdAt: { $gte: ini, $lt: fim },
+      // entregue: false, // 👈 descomente se quiser mostrar só as pendentes
     })
       .sort({ createdAt: -1 })
       .lean();
