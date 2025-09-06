@@ -50,6 +50,9 @@ exports.criarCliente = async (req, res) => {
       location,
       padraoSemanal, // opcional
       inicioCicloFaturamento, // opcional
+      telefone, // opcional
+      email, // opcional
+      observacoes, // opcional
     } = req.body;
 
     if (!nome || !endereco || !rota || !padaria) {
@@ -100,9 +103,12 @@ exports.criarCliente = async (req, res) => {
       endereco: endereco.trim(),
       rota: rotaNorm,
       padaria: padariaId,
-      location: loc, // obrigatório
+      location: loc,
       inicioCicloFaturamento: startCycle,
       ...(padraoSemanal ? { padraoSemanal } : {}),
+      ...(telefone ? { telefone: String(telefone).trim() } : {}),
+      ...(email ? { email: String(email).trim().toLowerCase() } : {}),
+      ...(observacoes ? { observacoes: String(observacoes).trim() } : {}),
     });
 
     res.status(201).json(novo);
@@ -193,20 +199,23 @@ exports.atualizarCliente = async (req, res) => {
     if (typeof nome === "string") cliente.nome = nome.trim();
     if (typeof endereco === "string") cliente.endereco = endereco.trim();
     if (typeof rota === "string") cliente.rota = rota.trim().toUpperCase();
+    if (typeof req.body.telefone === "string")
+      cliente.telefone = req.body.telefone.trim();
+    if (typeof req.body.email === "string")
+      cliente.email = req.body.email.trim().toLowerCase();
+    if (typeof req.body.observacoes === "string")
+      cliente.observacoes = req.body.observacoes.trim();
 
     // location é OBRIGATÓRIO no resultado final:
-    // - se veio no body, valida e aplica;
-    // - se não veio, valida se o cliente já possui location válido;
     if (typeof location !== "undefined") {
       const loc = parseLocation(location);
       ensureHasValidLocation(loc);
       cliente.location = loc;
     } else {
-      // não veio no body — garante que o cliente já tem location válido
       const loc = parseLocation(cliente.location);
       ensureHasValidLocation(loc);
-      // mantém o existente
     }
+
     // Admin pode alterar o início do ciclo de faturamento, se for necessário.
     if (
       role === "admin" &&
@@ -218,12 +227,11 @@ exports.atualizarCliente = async (req, res) => {
           .status(400)
           .json({ erro: "inicioCicloFaturamento inválido." });
       }
-      // normaliza pra 00:00 do dia informado
       d.setHours(0, 0, 0, 0);
       cliente.inicioCicloFaturamento = d;
     }
 
-    // (opcional) Admin/gerente podem trocar o padrão semanal por aqui também
+    // (opcional) trocar o padrão semanal aqui também
     if (typeof req.body.padraoSemanal !== "undefined") {
       cliente.padraoSemanal = req.body.padraoSemanal || {};
     }
@@ -258,8 +266,8 @@ exports.deletarCliente = async (req, res) => {
       .json({ erro: erro.message || "Erro ao deletar cliente." });
   }
 };
-// >>> em controllers/clientesController.js
 
+/* --------- Padrão semanal (para previsões) ---------- */
 const popPaths = [
   "padraoSemanal.domingo.produto",
   "padraoSemanal.segunda.produto",
@@ -285,7 +293,7 @@ function normDia(lista = []) {
   });
 }
 
-/** GET /api/clientes/:id/padrao-semanal */
+/** GET /clientes/:id/padrao-semanal */
 exports.padraoSemanalCliente = async (req, res) => {
   try {
     const { id } = req.params;
@@ -329,10 +337,9 @@ exports.padraoSemanalCliente = async (req, res) => {
   }
 };
 
-/** GET /api/clientes/padrao-semanal?padaria=<id> */
+/** GET /clientes/padrao-semanal?padaria=<id> */
 exports.padraoSemanalTodos = async (req, res) => {
   try {
-    // admin pode passar ?padaria=; gerente usa a própria padaria
     let padariaId =
       req.usuario?.role === "admin" ? req.query.padaria : req.usuario?.padaria;
 
@@ -364,5 +371,77 @@ exports.padraoSemanalTodos = async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ erro: "Falha ao listar padrões semanais." });
+  }
+};
+
+/** GET /clientes/:id/basico  (ADMIN/GERENTE) */
+exports.getClienteBasico = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ erro: "ID inválido." });
+    }
+
+    const cli = await Cliente.findById(id)
+      .select("nome endereco rota telefone email observacoes location padaria")
+      .lean();
+
+    if (!cli) return res.status(404).json({ erro: "Cliente não encontrado." });
+
+    // gerente só pode ver cliente da própria padaria
+    if (
+      req.usuario?.role === "gerente" &&
+      String(cli.padaria) !== String(req.usuario.padaria)
+    ) {
+      return res.status(403).json({
+        erro: "Gerente só pode consultar clientes da própria padaria.",
+      });
+    }
+
+    return res.json({
+      id: String(cli._id),
+      nome: cli.nome,
+      endereco: cli.endereco || "",
+      rota: cli.rota || "",
+      telefone: cli.telefone || "",
+      email: cli.email || "",
+      observacoes: cli.observacoes || "",
+      location: cli.location || null,
+    });
+  } catch (e) {
+    console.error("getClienteBasico:", e);
+    return res.status(500).json({ erro: "Falha ao buscar dados do cliente." });
+  }
+};
+
+/** PATCH /clientes/:id/observacoes  (ADMIN/GERENTE) */
+exports.atualizarObservacoes = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { observacoes } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ erro: "ID inválido." });
+    }
+
+    const cli = await Cliente.findById(id);
+    if (!cli) return res.status(404).json({ erro: "Cliente não encontrado." });
+
+    if (
+      req.usuario?.role === "gerente" &&
+      String(cli.padaria) !== String(req.usuario.padaria)
+    ) {
+      return res
+        .status(403)
+        .json({ erro: "Gerente só pode editar clientes da própria padaria." });
+    }
+
+    cli.observacoes = typeof observacoes === "string" ? observacoes.trim() : "";
+    await cli.save();
+
+    return res.json({ ok: true, observacoes: cli.observacoes });
+  } catch (e) {
+    console.error("atualizarObservacoes:", e);
+    return res.status(500).json({ erro: "Falha ao salvar observações." });
   }
 };

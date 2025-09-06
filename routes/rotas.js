@@ -1,12 +1,15 @@
+// padaria-backend/routes/rotas.js
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
+
 const Entrega = require("../models/Entrega");
 const Cliente = require("../models/Cliente");
 const RotaDia = require("../models/RotaDia");
+const Usuario = require("../models/Usuario"); // << necessário para rotaAtual
 
 /* =========================
    Utilidades de data (hoje)
@@ -213,6 +216,9 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
     }
     await lock.save();
 
+    // >>> marca a rota no próprio usuário (para colorir o pin no mapa do gerente)
+    await Usuario.findByIdAndUpdate(usuarioId, { rotaAtual: rota });
+
     // ATRIBUIR ENTREGAS (apenas do dia):
     //  - se não stale: somente as com entregador: null ou já minhas
     //  - se stale: também as do antigo dono
@@ -280,12 +286,17 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
       data,
       entregador: usuarioId,
     });
-    if (!lock) return res.json({ ok: true, liberado: false });
+    if (!lock) {
+      // mesmo sem lock, garanta que rotaAtual sai do usuário
+      await Usuario.findByIdAndUpdate(usuarioId, { $unset: { rotaAtual: 1 } });
+      return res.json({ ok: true, liberado: false });
+    }
 
     // fecha período corrente no histórico
     const last = lock.historico?.[lock.historico.length - 1];
     if (last && !last.fim) last.fim = now;
 
+    const rota = lock.rota;
     lock.entregador = null;
     lock.lastSeenAt = null;
     lock.status = "livre";
@@ -294,7 +305,7 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
     // desatribui entregas pendentes desse entregador (do dia) nessa rota
     const { ini, fim } = hojeRange();
     const idsClientes = await Cliente.find(
-      { padaria, rota: lock.rota },
+      { padaria, rota },
       { _id: 1 }
     ).lean();
     const clienteIds = idsClientes.map((c) => c._id);
@@ -305,23 +316,22 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
           padaria,
           cliente: { $in: clienteIds },
           entregue: { $in: [false, null] },
-          $and: [
-            {
-              $or: [
-                { createdAt: { $gte: ini, $lt: fim } },
-                { dataEntrega: { $gte: ini, $lt: fim } },
-                { data: { $gte: ini, $lt: fim } },
-                { horaPrevista: { $gte: ini, $lt: fim } },
-              ],
-            },
-            { $or: orOwners }, // <= (null | usuário atual | staleHolderId)
+          $or: [
+            { createdAt: { $gte: ini, $lt: fim } },
+            { dataEntrega: { $gte: ini, $lt: fim } },
+            { data: { $gte: ini, $lt: fim } },
+            { horaPrevista: { $gte: ini, $lt: fim } },
           ],
+          entregador: usuarioId, // << apenas as minhas
         },
-        { $set: { entregador: usuarioId } }
+        { $set: { entregador: null } } // << desatribui
       );
     }
 
-    res.json({ ok: true, liberado: true, rota: lock.rota });
+    // >>> ao liberar, limpe a rotaAtual do usuário
+    await Usuario.findByIdAndUpdate(usuarioId, { $unset: { rotaAtual: 1 } });
+
+    res.json({ ok: true, liberado: true, rota });
   } catch (err) {
     console.error("erro /rotas/release:", err);
     res.status(500).json({ erro: "Falha ao liberar rota" });

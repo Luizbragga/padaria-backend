@@ -139,27 +139,60 @@ exports.entregasPorDia = async (req, res) => {
 
 // /analitico/inadimplencia
 // Retorna: { pagantes, inadimplentes }
+// /analitico/inadimplencia?padaria=...&mes=YYYY-MM (mes opcional; default = mês atual)
+// Regra: só é inadimplente quem ficou devendo ATÉ o final do mês anterior.
+// O mês corrente NÃO entra como inadimplência (ainda está em curso).
 exports.inadimplencia = async (req, res) => {
   try {
     const padariaId = getPadariaFromReq(req);
-    const match = {};
-    if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
+    if (!padariaId) return res.json({ pagantes: 0, inadimplentes: 0 });
 
-    const agreg = await Entrega.aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: "$pago",
-          total: { $sum: 1 },
-        },
-      },
-    ]);
+    // pega início do mês selecionado (ou do mês atual)
+    const { ini /*, fim, mesStr*/ } = mesRange(req.query.mes);
 
-    const pagantes = agreg.find((x) => x._id === true)?.total || 0;
-    const inadimplentes = agreg.find((x) => x._id === false)?.total || 0;
+    // Total de clientes da padaria (para compor "pagantes")
+    const clientes = await Cliente.find({
+      padaria: toObjectIdIfValid(padariaId),
+    })
+      .select("_id")
+      .lean();
+    const totalClientes = clientes.length;
 
-    res.json({ pagantes, inadimplentes });
+    // Todas as entregas criadas ANTES do início do mês corrente/selecionado
+    const entregasAnteriores = await Entrega.find({
+      padaria: toObjectIdIfValid(padariaId),
+      createdAt: { $lt: ini },
+    })
+      .select("cliente produtos pagamentos")
+      .lean();
+
+    // Calcula pendência acumulada por cliente até o mês anterior
+    const pendAnteriorPorCliente = new Map(); // clienteId -> valor em aberto
+
+    for (const e of entregasAnteriores) {
+      if (!e.cliente) continue; // ignoramos entregas sem cliente associado
+      const cid = String(e.cliente);
+      const esperado = sumProdutosEsperado(e); // soma do previsto da entrega
+      const pago = sumPagamentos(e); // soma dos pagamentos dessa entrega
+      const diff = Math.max(0, esperado - pago);
+      if (diff > 0) {
+        pendAnteriorPorCliente.set(
+          cid,
+          (pendAnteriorPorCliente.get(cid) || 0) + diff
+        );
+      }
+    }
+
+    const inadimplentes = [...pendAnteriorPorCliente.values()].filter(
+      (v) => v > 0
+    ).length;
+
+    // "Pagantes" = clientes SEM pendência anterior
+    const pagantes = Math.max(0, totalClientes - inadimplentes);
+
+    return res.json({ pagantes, inadimplentes });
   } catch (erro) {
+    console.error("Erro em inadimplencia:", erro);
     res.status(500).json({ erro: "Erro ao gerar relatório de inadimplência." });
   }
 };
@@ -472,37 +505,76 @@ exports.faturamentoMensal = async (req, res) => {
 
 // GET /analitico/a-receber?padaria=...&mes=YYYY-MM
 // Calcula A Receber por mês agregando por cliente, respeitando inicioCicloFaturamento por cliente
+// controllers/analiticoController.js  (substitua só a função abaixo)
+
 exports.aReceberMensal = async (req, res) => {
   try {
     const padariaId = getPadariaFromReq(req) || req.usuario?.padaria;
     if (!padariaId) {
       return res.status(400).json({ erro: "Padaria não informada." });
     }
-
     const { ini, fim, mesStr } = mesRange(req.query.mes);
     const padaria = toObjectIdIfValid(padariaId);
 
-    // 1) Carrega TODOS os clientes da padaria com padraoSemanal populado (p/ ter preço)
-    const clientes = await require("../models/Cliente")
-      .find({ padaria })
+    // --- helpers locais (auto contidos) ---
+    const POP_PADRAO = [
+      { path: "padraoSemanal.domingo.produto", select: "preco" },
+      { path: "padraoSemanal.segunda.produto", select: "preco" },
+      { path: "padraoSemanal.terca.produto", select: "preco" },
+      { path: "padraoSemanal.quarta.produto", select: "preco" },
+      { path: "padraoSemanal.quinta.produto", select: "preco" },
+      { path: "padraoSemanal.sexta.produto", select: "preco" },
+      { path: "padraoSemanal.sabado.produto", select: "preco" },
+    ];
+
+    const diaKeyFromDate = (d) =>
+      ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"][
+        d.getDay()
+      ];
+
+    const iterateDays = (start, end, cb) => {
+      const cur = new Date(start);
+      cur.setHours(0, 0, 0, 0);
+      while (cur < end) {
+        cb(cur);
+        cur.setDate(cur.getDate() + 1);
+      }
+    };
+
+    const somaListaDoDia = (lista) =>
+      (Array.isArray(lista) ? lista : []).reduce((acc, it) => {
+        const preco = Number(
+          it?.produto?.preco ?? it?.preco ?? it?.precoUnitario ?? 0
+        );
+        const qtd = Number(it?.quantidade ?? it?.qtd ?? 0);
+        return acc + preco * qtd;
+      }, 0);
+
+    const normaliza00 = (d) => {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      return x;
+    };
+
+    // --- 1) Carrega clientes (com preço populado) ---
+    const Cliente = require("../models/Cliente");
+    const clientes = await Cliente.find({ padaria })
       .populate(POP_PADRAO)
-      .select("nome padraoSemanal inicioCicloFaturamento")
+      .select("nome rota padraoSemanal inicioCicloFaturamento")
       .lean();
 
-    // 2) PREVISTO do mês por cliente (somando dia a dia)
-    const previstoPorCliente = new Map(); // clienteId -> previstoMes
+    // --- 2) Previsto do mês por cliente (dia a dia desde o início do ciclo) ---
+    const previstoPorCliente = new Map(); // id -> €
     for (const cli of clientes) {
       const cliId = String(cli._id);
-      // se existir inicioCicloFaturamento, só conta a partir dele
       const inicioCli = cli.inicioCicloFaturamento
-        ? new Date(cli.inicioCicloFaturamento)
+        ? normaliza00(cli.inicioCicloFaturamento)
         : ini;
-
       const start = inicioCli > ini ? inicioCli : ini;
 
       let previsto = 0;
       iterateDays(start, fim, (d) => {
-        const key = diaKeyFromDate(d); // domingo/segunda/...
+        const key = diaKeyFromDate(d);
         const lista = cli?.padraoSemanal?.[key] || [];
         previsto += somaListaDoDia(lista);
       });
@@ -510,7 +582,7 @@ exports.aReceberMensal = async (req, res) => {
       previstoPorCliente.set(cliId, previsto);
     }
 
-    // 3) PAGOS do mês por cliente (pagamentos reais vindos de Entrega)
+    // --- 3) Pagos do mês por cliente (Entregas recorrentes) ---
     const entregasComPagamentoNoMes = await Entrega.find({
       padaria,
       "pagamentos.0": { $exists: true },
@@ -519,41 +591,63 @@ exports.aReceberMensal = async (req, res) => {
       .select("cliente pagamentos")
       .lean();
 
-    const pagoPorCliente = new Map(); // clienteId -> pagoMes
+    const pagoPorCliente = new Map(); // id -> €
     for (const e of entregasComPagamentoNoMes) {
       const cliId = String(e.cliente || "sem-cliente");
       for (const p of e.pagamentos || []) {
         const dt = new Date(p.data);
         if (dt >= ini && dt < fim) {
-          const v = Number(p.valor) || 0;
+          const v = Number(p?.valor) || 0;
           pagoPorCliente.set(cliId, (pagoPorCliente.get(cliId) || 0) + v);
         }
       }
     }
 
-    // 4) Pendência ANTERIOR (simples, baseada no que existe em Entrega antes do mês)
-    //    -> podemos aprimorar depois com projeção histórica por padrão semanal
+    // --- 4) Pendência ANTERIOR (tudo que foi criado antes de 'ini') ---
+    // 4) Pendência ANTERIOR: tudo que ficou antes do início do mês selecionado (ini)
     const entregasAnteriores = await Entrega.find({
       padaria,
       createdAt: { $lt: ini },
     })
-      .select("produtos pagamentos")
+      .select("cliente produtos pagamentos")
       .lean();
 
     let totalPrevistoAnterior = 0;
     let totalPagoAnterior = 0;
+
+    // mapa clienteId -> valor em aberto de meses anteriores
+    const pendAnteriorPorCliente = new Map();
+
     for (const e of entregasAnteriores) {
-      totalPrevistoAnterior += sumProdutosEsperado(e);
-      totalPagoAnterior += sumPagamentos(e);
+      const cid = String(e.cliente || "sem-cliente");
+      const prevE = sumProdutosEsperado(e); // soma dos produtos esperados nessa entrega
+      const pagoE = sumPagamentos(e); // soma dos pagamentos dessa entrega
+
+      totalPrevistoAnterior += prevE;
+      totalPagoAnterior += pagoE;
+
+      const diff = Math.max(0, prevE - pagoE);
+      if (diff > 0) {
+        pendAnteriorPorCliente.set(
+          cid,
+          (pendAnteriorPorCliente.get(cid) || 0) + diff
+        );
+      }
     }
+
     const pendenciaAnterior = Math.max(
       0,
       totalPrevistoAnterior - totalPagoAnterior
     );
 
-    // 5) Monta saída por cliente e totais
-    let previstoMes = 0;
-    let pagoMes = 0;
+    // QUANTOS clientes têm qualquer valor > 0 em aberto de meses anteriores
+    const inadimplentes = [...pendAnteriorPorCliente.values()].filter(
+      (v) => v > 0
+    ).length;
+
+    // --- 5) Monta saída por cliente e totais (recorrentes) ---
+    let totalPrevisto = 0;
+    let totalPagoRecorrente = 0;
     const clientesOut = [];
 
     for (const cli of clientes) {
@@ -564,21 +658,19 @@ exports.aReceberMensal = async (req, res) => {
 
       clientesOut.push({
         cliente: id,
+        nome: cli.nome || "",
+        rota: cli.rota || "",
         previsto: prev,
         pago,
         pendente: pend,
       });
 
-      previstoMes += prev;
-      pagoMes += pago;
+      totalPrevisto += prev;
+      totalPagoRecorrente += pago;
     }
 
-    // Nota: clientes que tenham pagamento mas não estão mais na coleção (edge raro)
-    // não somamos no "previsto", mas o "pago" total já considera só clientes da lista.
-
-    const pendenteAtual = Math.max(0, previstoMes - pagoMes);
-    const totalPendente = pendenteAtual + pendenciaAnterior;
-    // Soma das avulsas dentro do mês (pagas no ato)
+    // --- 6) Avulsas do mês (somam no pagoMes, não no previsto/pendente) ---
+    const EntregaAvulsa = require("../models/EntregaAvulsa");
     const pagoAvulsasArr = await EntregaAvulsa.aggregate([
       { $match: { padaria } },
       {
@@ -587,39 +679,29 @@ exports.aReceberMensal = async (req, res) => {
           valorRef: { $ifNull: ["$valor", "$valorTotal"] },
         },
       },
-      {
-        $match: {
-          dataRef: { $gte: ini, $lt: fim },
-        },
-      },
-      {
-        $group: { _id: null, total: { $sum: "$valorRef" } },
-      },
+      { $match: { dataRef: { $gte: ini, $lt: fim } } },
+      { $group: { _id: null, total: { $sum: "$valorRef" } } },
     ]);
     const pagoAvulsasMes = pagoAvulsasArr[0]?.total || 0;
 
-    // ...e na resposta final, some ao pagoMes:
-    res.json({
-      mes: mesStr,
-      previstoMes: totalPrevisto,
-      pagoMes: totalPago + pagoAvulsasMes, // <-- soma aqui
-      pendenteAtual: Math.max(0, totalPrevisto - totalPago),
-      pendenciaAnterior, // mantenha sua lógica atual
-      totalPendente: Math.max(0, totalPrevisto - totalPago) + pendenciaAnterior,
-      clientes,
-    });
+    // pendência do mês considera apenas recorrentes
+    const pendenteAtual = Math.max(0, totalPrevisto - totalPagoRecorrente);
+    const totalPendente = pendenteAtual + pendenciaAnterior;
+
+    // --- resposta final ---
     return res.json({
       mes: mesStr,
-      previstoMes: totalPrevisto,
-      pagoMes: totalPago + pagoAvulsasMes,
-      pendenteAtual,
+      previstoMes: totalPrevisto, // só recorrentes
+      pagoMes: totalPagoRecorrente + pagoAvulsasMes, // recorrentes + avulsas
+      pendenteAtual, // só recorrentes
       pendenciaAnterior,
       totalPendente,
-      clientes,
+      inadimplentes,
+      clientes: clientesOut, // por cliente (recorrentes)
     });
   } catch (erro) {
     console.error("Erro em aReceberMensal:", erro);
-    res.status(500).json({ erro: "Erro ao calcular A receber do mês." });
+    return res.status(500).json({ erro: "Erro ao calcular A receber do mês." });
   }
 };
 
@@ -747,6 +829,7 @@ exports.listarEntregasDoDia = async (req, res) => {
 };
 
 // /analitico/localizacao-entregadores
+// /analitico/localizacao-entregadores
 exports.obterLocalizacaoEntregadores = async (req, res) => {
   try {
     const padariaId = getPadariaFromReq(req);
@@ -756,16 +839,20 @@ exports.obterLocalizacaoEntregadores = async (req, res) => {
       role: "entregador",
       padaria: toObjectIdIfValid(padariaId),
       localizacaoAtual: { $ne: null },
-    }).select("nome localizacaoAtual");
+    })
+      .select("_id nome rotaAtual localizacaoAtual")
+      .lean(); // <= resposta mais leve
 
-    res.json(entregadores);
+    // front já normaliza _id/id/…; só retornamos direto
+    return res.json(entregadores);
   } catch (erro) {
-    res
+    return res
       .status(500)
       .json({ erro: "Erro ao buscar localização dos entregadores" });
   }
 };
 
+// /analitico/entregas-tempo-real?padaria=...
 // /analitico/entregas-tempo-real?padaria=...
 exports.entregasTempoReal = async (req, res) => {
   try {
@@ -777,7 +864,10 @@ exports.entregasTempoReal = async (req, res) => {
     const entregasDeHoje = await Entrega.find({
       padaria: toObjectIdIfValid(padariaId),
       createdAt: { $gte: ini, $lt: fim },
-    }).lean();
+    })
+      .populate({ path: "cliente", select: "nome rota location" }) // <— AQUI
+      .select("cliente entregue pago produtos") // leve
+      .lean();
 
     res.json(entregasDeHoje);
   } catch (erro) {
@@ -787,29 +877,51 @@ exports.entregasTempoReal = async (req, res) => {
 };
 
 // /analitico/pagamentos (com filtros)
+// /analitico/pagamentos (com filtros)
 exports.pagamentosDetalhados = async (req, res) => {
   try {
-    const { dataInicial, dataFinal, forma } = req.query;
+    const { dataInicial, dataFinal, dataEspecifica, forma } = req.query;
 
+    const padaria = toObjectIdIfValid(
+      getPadariaFromReq(req) || req.usuario.padaria
+    );
+    if (!padaria) {
+      return res.status(400).json({ mensagem: "Padaria não informada." });
+    }
+
+    // Base do filtro
     const filtros = {
+      padaria,
       "pagamentos.0": { $exists: true },
-      padaria: toObjectIdIfValid(getPadariaFromReq(req) || req.usuario.padaria),
     };
 
-    if (dataInicial && dataFinal) {
+    // Janela de datas:
+    if (dataEspecifica) {
+      // um único dia [00:00, 24:00)
+      const d = new Date(dataEspecifica);
+      const ini = new Date(d);
+      ini.setHours(0, 0, 0, 0);
+      const fim = new Date(d);
+      fim.setHours(24, 0, 0, 0);
+      filtros["pagamentos.data"] = { $gte: ini, $lt: fim };
+    } else if (dataInicial && dataFinal) {
       filtros["pagamentos.data"] = {
         $gte: new Date(dataInicial),
         $lte: new Date(dataFinal),
       };
     }
 
-    // filtro precoce por forma (opcional)
-    if (forma && forma !== "todas") {
+    // Forma (mapeando "dinheiro" -> "não informado", como já fazia)
+    if (forma && forma !== "todas" && forma !== "") {
       filtros["pagamentos.forma"] =
         forma === "dinheiro" ? "não informado" : forma;
     }
 
-    const entregas = await Entrega.find(filtros).populate("entregador");
+    // Popula entregador e cliente para obter nomes
+    const entregas = await Entrega.find(filtros)
+      .populate({ path: "entregador", select: "nome" })
+      .populate({ path: "cliente", select: "nome" })
+      .lean();
 
     const pagamentos = [];
     const clientesSet = new Set();
@@ -820,12 +932,24 @@ exports.pagamentosDetalhados = async (req, res) => {
         const formaDoPagamento =
           pagamento.forma === "não informado" ? "dinheiro" : pagamento.forma;
 
-        // filtro tardio por forma (caso o precoce não pegue todos)
+        // Filtro tardio por forma (garantia)
         if (forma && forma !== "todas" && formaDoPagamento !== forma) continue;
+
+        // Filtro tardio por data (quando usamos dataInicial/dataFinal)
+        if (filtros["pagamentos.data"]) {
+          const dt = new Date(pagamento.data);
+          const { $gte, $lte, $lt } = filtros["pagamentos.data"];
+
+          // compatível com as duas modalidades
+          if ($gte && dt < $gte) continue;
+          if ($lte && dt > $lte) continue;
+          if ($lt && dt >= $lt) continue;
+        }
 
         pagamentos.push({
           _id: pagamento._id,
-          cliente: entrega.cliente,
+          clienteId: String(entrega.cliente?._id || entrega.cliente || ""),
+          clienteNome: entrega.cliente?.nome || "Desconhecido",
           entregador: entrega.entregador?.nome || "Desconhecido",
           valor: Number(pagamento.valor) || 0,
           forma: formaDoPagamento,
@@ -833,15 +957,19 @@ exports.pagamentosDetalhados = async (req, res) => {
         });
 
         totalRecebido += Number(pagamento.valor) || 0;
-        if (entrega.cliente) clientesSet.add(String(entrega.cliente));
+        if (entrega.cliente)
+          clientesSet.add(String(entrega.cliente?._id || entrega.cliente));
       }
     }
+
+    // ordena mais recentes primeiro
+    pagamentos.sort((a, b) => new Date(b.data) - new Date(a.data));
 
     res.status(200).json({
       pagamentos,
       totalRecebido,
-      totalPendente: 0,
       clientesPagantes: clientesSet.size,
+      totalPendente: 0, // mantido para compatibilidade (não usamos aqui)
     });
   } catch (erro) {
     console.error(erro);

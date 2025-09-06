@@ -119,6 +119,7 @@ app.use("/analitico", analiticoRoutes);
 app.use("/config", require("./routes/config"));
 app.use("/gerente", require("./routes/gerente"));
 app.use("/admin", require("./routes/admin"));
+app.use("/pagamentos", require("./routes/pagamentos"));
 // app.use("/analitico", require("./routes/analitico"));
 
 app.use("/teste-protegido", require("./routes/testeProtegido"));

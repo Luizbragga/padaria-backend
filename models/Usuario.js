@@ -7,15 +7,13 @@ const UsuarioSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      unique: true, // você faz login por "nome", então é bom ser único
+      unique: true, // login por "nome"
     },
 
     senha: {
       type: String,
       required: true,
-      // Dica: se no seu controller você usa select('+senha'),
-      // pode trocar para: select: false
-      // select: false,
+      // select: false, // (opcional)
     },
 
     role: {
@@ -39,6 +37,14 @@ const UsuarioSchema = new mongoose.Schema(
       index: true,
     },
 
+    // 🔵 rota atual assumida pelo entregador (usada para colorir o pin no mapa do gerente)
+    rotaAtual: {
+      type: String,
+      uppercase: true,
+      trim: true,
+      default: null,
+    },
+
     // usado em mapas/tempo real
     localizacaoAtual: {
       lat: { type: Number },
@@ -55,14 +61,6 @@ const UsuarioSchema = new mongoose.Schema(
 // Índices úteis
 UsuarioSchema.index({ role: 1, padaria: 1 });
 UsuarioSchema.index({ nome: 1 });
-
-// Caso queira forçar que gerente/entregador tenham padaria, ative este hook:
-// (Comentado para não alterar seu fluxo atual.)
-// UsuarioSchema.pre("save", function (next) {
-//   if (this.role !== "admin" && !this.padaria) {
-//     return next(new Error("Gerente/Entregador devem ter uma padaria vinculada."));
-//   }
-//   next();
-// });
+UsuarioSchema.index({ rotaAtual: 1 }); // (opcional, ajuda em consultas por rota)
 
 module.exports = mongoose.model("Usuario", UsuarioSchema);
