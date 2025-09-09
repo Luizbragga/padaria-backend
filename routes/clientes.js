@@ -52,5 +52,11 @@ router.get(
   autorizar("admin", "gerente"),
   clientesController.getClienteBasico
 );
+// Listar clientes (admin ou gerente) — aceita ?padaria=<id>&rota=A&busca=...
+router.get(
+  "/",
+  autorizar("admin", "gerente"),
+  clientesController.listarClientes
+);
 
 module.exports = router;

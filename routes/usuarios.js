@@ -1,33 +1,48 @@
+// routes/usuarios.js
 const express = require("express");
 const router = express.Router();
 
 const usuariosController = require("../controllers/usuariosController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
-const Usuario = require("../models/Usuario");
+
+// Todas exigem autenticação
+router.use(autenticar);
 
 /**
- * POST /usuarios
- * Criar novo usuário (somente admin)
+ * Criar usuário
+ * - Somente ADMIN (o controller também valida papéis)
  */
-router.post(
+router.post("/", autorizar("admin"), usuariosController.criarUsuario);
+
+/**
+ * Listar usuários
+ * - Admin e Gerente (o controller filtra o escopo)
+ */
+router.get(
   "/",
-  autenticar,
-  autorizar("admin"),
-  usuariosController.criarUsuario
+  autorizar("admin", "gerente"),
+  usuariosController.listarUsuarios
 );
 
-/**
- * PUT /usuarios/atualizar-localizacao
- * Atualiza a localização atual do entregador logado
- */
+router.get("/me", usuariosController.me);
+
+router.get("/:id", usuariosController.obterUsuario);
+
+router.patch("/:id", usuariosController.atualizarUsuario);
+
+router.patch("/:id/senha", usuariosController.alterarSenha);
+
+router.delete("/:id", usuariosController.excluirUsuario);
+
+router.patch("/:id/localizacao", usuariosController.atualizarLocalizacao);
+
 router.put(
   "/atualizar-localizacao",
-  autenticar,
   autorizar("entregador"),
   async (req, res) => {
+    const Usuario = require("../models/Usuario");
     try {
-      // aceita lat/lng OU latitude/longitude
       let { lat, lng, latitude, longitude } = req.body;
       lat = Number(lat ?? latitude);
       lng = Number(lng ?? longitude);

@@ -106,7 +106,7 @@ app.get("/", (req, res) => res.send("Olá, Sistema de Entregas da Padaria!"));
 app.use("/login", require("./routes/login"));
 app.use("/token", require("./routes/tokens"));
 
-app.use("/usuarios", require("./routes/usuarios"));
+app.use("/api/usuarios", require("./routes/usuarios"));
 app.use("/padarias", require("./routes/padarias"));
 app.use("/produtos", require("./routes/produtos"));
 app.use("/api/clientes", require("./routes/clientes")); // atenção: prefixo /api
