@@ -120,29 +120,90 @@ exports.criarCliente = async (req, res) => {
   }
 };
 
-/** GET /clientes?padaria=<id>&rota=A&busca=nome  (ADMIN ou GERENTE) */
+/**
+ * GET /clientes
+ * Params aceitos:
+ *  - admin: ?padaria=<id> (obrigatório)
+ *  - gerente/atendente: padaria = do usuário (ignora ?padaria)
+ *  - rota=A
+ *  - busca= (aplica em nome OU endereco)
+ *  - buscaNome= (apenas nome)
+ *  - buscaEndereco= (apenas endereco)
+ *  - pagina=1, limit=50
+ */
 exports.listarClientes = async (req, res) => {
   try {
     const { role, padaria: padariaUser } = req.usuario || {};
-    const { padaria: padariaQuery, rota, busca } = req.query;
+    const {
+      padaria: padariaQuery,
+      rota,
+      busca,
+      buscaNome,
+      buscaEndereco,
+      pagina = 1,
+      limit = 50,
+    } = req.query;
 
-    let filtro = {};
+    // --- padaria ---
+    let padariaFiltro = null;
     if (role === "admin") {
-      if (padariaQuery) filtro.padaria = toObjectIdIfValid(padariaQuery);
-    } else if (role === "gerente") {
+      if (!padariaQuery) {
+        return res
+          .status(400)
+          .json({ erro: "Para admin, informe ?padaria=<id>." });
+      }
+      padariaFiltro = toObjectIdIfValid(padariaQuery);
+    } else if (role === "gerente" || role === "atendente") {
       if (!padariaUser)
         return res.status(400).json({ erro: "Usuário sem padaria." });
-      filtro.padaria = toObjectIdIfValid(padariaUser);
+      padariaFiltro = toObjectIdIfValid(padariaUser);
     } else {
       return res
         .status(403)
-        .json({ erro: "Apenas administradores ou gerentes podem consultar." });
+        .json({ erro: "Apenas administradores, gerentes ou atendentes." });
     }
 
-    if (rota) filtro.rota = String(rota).trim().toUpperCase();
-    if (busca) filtro.nome = new RegExp(busca.trim(), "i");
+    // --- filtros textuais ---
+    const and = [{ padaria: padariaFiltro }];
 
-    const clientes = await Cliente.find(filtro).sort({ nome: 1 }).lean();
+    if (rota) {
+      and.push({ rota: String(rota).trim().toUpperCase() });
+    }
+
+    if (busca) {
+      const rx = new RegExp(String(busca).trim(), "i");
+      and.push({ $or: [{ nome: rx }, { endereco: rx }] });
+    }
+
+    if (buscaNome) {
+      const rx = new RegExp(String(buscaNome).trim(), "i");
+      and.push({ nome: rx });
+    }
+
+    if (buscaEndereco) {
+      const rx = new RegExp(String(buscaEndereco).trim(), "i");
+      and.push({ endereco: rx });
+    }
+
+    const filtro = and.length > 1 ? { $and: and } : and[0];
+
+    // paginação
+    const p = Math.max(1, parseInt(pagina, 10) || 1);
+    const l = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+    const skip = (p - 1) * l;
+
+    const clientes = await Cliente.find(filtro, {
+      nome: 1,
+      endereco: 1,
+      rota: 1,
+      telefone: 1,
+      email: 1,
+    })
+      .sort({ nome: 1 })
+      .skip(skip)
+      .limit(l)
+      .lean();
+
     res.json(clientes);
   } catch (erro) {
     console.error("Erro ao listar clientes:", erro);
@@ -443,5 +504,45 @@ exports.atualizarObservacoes = async (req, res) => {
   } catch (e) {
     console.error("atualizarObservacoes:", e);
     return res.status(500).json({ erro: "Falha ao salvar observações." });
+  }
+};
+
+/* ---------- utilitário para o modal: rotas distintas da padaria ---------- */
+/** GET /clientes/rotas/distintas
+ * admin -> exige ?padaria=<id>
+ * gerente/atendente -> padaria do usuário
+ */
+exports.rotasDistintas = async (req, res) => {
+  try {
+    const { role, padaria: padariaUser } = req.usuario || {};
+    const { padaria: padariaQuery } = req.query;
+
+    let padariaFiltro = null;
+    if (role === "admin") {
+      if (!padariaQuery)
+        return res
+          .status(400)
+          .json({ erro: "Para admin, informe ?padaria=<id>." });
+      padariaFiltro = toObjectIdIfValid(padariaQuery);
+    } else if (role === "gerente" || role === "atendente") {
+      if (!padariaUser)
+        return res.status(400).json({ erro: "Usuário sem padaria." });
+      padariaFiltro = toObjectIdIfValid(padariaUser);
+    } else {
+      return res
+        .status(403)
+        .json({ erro: "Apenas administradores, gerentes ou atendentes." });
+    }
+
+    const rotas = await Cliente.distinct("rota", { padaria: padariaFiltro });
+    const saida = (rotas || [])
+      .filter(Boolean)
+      .map((r) => String(r).toUpperCase())
+      .sort((a, b) => a.localeCompare(b, "pt-PT"));
+
+    res.json(saida);
+  } catch (e) {
+    console.error("rotasDistintas:", e);
+    res.status(500).json({ erro: "Erro ao listar rotas." });
   }
 };

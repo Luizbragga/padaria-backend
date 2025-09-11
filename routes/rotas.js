@@ -39,6 +39,38 @@ router.use(autenticar);
    Lista rotas reais (via Cliente.rota)
    com contagem de pendentes no dia.
    ===================================== */
+router.get(
+  "/nomes",
+  autorizar("admin", "gerente", "atendente"),
+  async (req, res) => {
+    try {
+      // padaria do usuário (gerente/atendente) ou vinda da query (admin)
+      const padariaId =
+        req.usuario?.role === "admin"
+          ? req.query.padaria || req.usuario?.padaria
+          : req.usuario?.padaria;
+
+      if (!padariaId) {
+        return res.status(400).json({ erro: "Padaria não informada" });
+      }
+
+      const padaria = mongoose.Types.ObjectId.isValid(padariaId)
+        ? new mongoose.Types.ObjectId(padariaId)
+        : padariaId;
+
+      // distinct nos clientes
+      const rotas = (await Cliente.distinct("rota", { padaria }))
+        .filter(Boolean)
+        .map((r) => String(r).toUpperCase())
+        .sort();
+
+      res.json(rotas);
+    } catch (e) {
+      console.error("erro /rotas/nomes:", e);
+      res.status(500).json({ erro: "Falha ao listar rotas" });
+    }
+  }
+);
 router.get("/disponiveis", autorizar("entregador"), async (req, res) => {
   try {
     const padariaId = req.usuario?.padaria;

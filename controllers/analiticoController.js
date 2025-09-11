@@ -800,7 +800,9 @@ exports.listarEntregasDoDia = async (req, res) => {
     const entregas = await Entrega.find({
       padaria: toObjectIdIfValid(padariaId),
       createdAt: { $gte: ini, $lt: fim },
-    }).populate("entregador", "nome");
+    })
+      .populate("entregador", "nome")
+      .populate("cliente", "nome");
 
     const entregasConcluidas = [];
     const entregasPendentes = [];
@@ -978,48 +980,63 @@ exports.pagamentosDetalhados = async (req, res) => {
 };
 
 // /analitico/notificacoes-recentes
-exports.notificacoesRecentes = async (req, res) => {
+exports.resumoFinanceiro = async (req, res) => {
   try {
-    const padariaId = getPadariaFromReq(req) || req.usuario.padaria;
-    if (!padariaId) return res.json({ eventos: [] });
+    const padariaId = req.query.padaria || req.usuario?.padaria;
+    if (!padariaId) {
+      return res.json({
+        totalRecebido: 0,
+        totalPendente: 0,
+        clientesPagantes: 0,
+      });
+    }
 
+    const padaria = toObjectIdIfValid(padariaId);
     const { ini, fim } = hojeRange();
 
-    const entregas = await Entrega.find({
-      padaria: toObjectIdIfValid(padariaId),
-      updatedAt: { $gte: ini, $lte: fim },
-    })
-      .sort({ updatedAt: -1 })
-      .limit(20)
-      .lean();
+    // 1) Entregas criadas HOJE (para pendência do dia)
+    // 2) Entregas com PAGAMENTO HOJE (para totalRecebido)
+    const [entregasCriadasHoje, entregasComPagamentoHoje] = await Promise.all([
+      Entrega.find({ padaria, createdAt: { $gte: ini, $lt: fim } })
+        .select("produtos pagamentos cliente")
+        .lean(),
+      Entrega.find({ padaria, "pagamentos.data": { $gte: ini, $lt: fim } })
+        .select("pagamentos cliente")
+        .lean(),
+    ]);
 
-    const eventos = entregas.map((entrega) => {
-      let tipo = "Atualização";
-      if (Array.isArray(entrega.problemas) && entrega.problemas.length > 0)
-        tipo = "Problema";
-      else if (entrega.entregue) tipo = "Entrega realizada";
-      else if (
-        Array.isArray(entrega.pagamentos) &&
-        entrega.pagamentos.length > 0
-      )
-        tipo = "Pagamento";
+    // totalRecebido = soma dos pagamentos com data hoje
+    let totalRecebido = 0;
+    const clientesComPagamento = new Set();
+    for (const e of entregasComPagamentoHoje) {
+      for (const p of e.pagamentos || []) {
+        const d = new Date(p.data);
+        if (d >= ini && d < fim) {
+          totalRecebido += Number(p.valor) || 0;
+          if (e.cliente) clientesComPagamento.add(String(e.cliente));
+        }
+      }
+    }
 
-      return {
-        id: entrega._id,
-        cliente: entrega.cliente,
-        tipo,
-        horario: entrega.updatedAt,
-      };
+    // totalPendente = (previsto - pago) das entregas criadas hoje
+    let totalPendente = 0;
+    for (const e of entregasCriadasHoje) {
+      const esperado = sumProdutosEsperado(e);
+      const pago = sumPagamentos(e);
+      totalPendente += Math.max(0, esperado - pago);
+    }
+
+    res.json({
+      totalRecebido,
+      totalPendente,
+      clientesPagantes: clientesComPagamento.size,
     });
-
-    res.json({ eventos });
   } catch (erro) {
-    res.status(500).json({
-      erro: "Erro ao buscar notificações recentes",
-      detalhes: erro.message,
-    });
+    console.error("Erro em resumoFinanceiro:", erro);
+    res.status(500).json({ erro: "Erro ao gerar resumo financeiro." });
   }
 };
+
 // GET /analitico/avulsas?padaria=...&mes=YYYY-MM
 exports.avulsasDoMes = async (req, res) => {
   try {
@@ -1091,5 +1108,142 @@ exports.resumoFinanceiro = async (req, res) => {
   } catch (erro) {
     console.error("Erro em resumoFinanceiro:", erro);
     res.status(500).json({ erro: "Erro ao gerar resumo financeiro." });
+  }
+};
+// /analitico/notificacoes-recentes
+// /analitico/notificacoes-recentes
+exports.notificacoesRecentes = async (req, res) => {
+  try {
+    const padariaId = getPadariaFromReq(req) || req.usuario?.padaria;
+    if (!padariaId) return res.json({ eventos: [] });
+
+    const padaria = toObjectIdIfValid(padariaId);
+    const { ini, fim } = hojeRange();
+
+    // 1) Pagamentos HOJE (traz updatedAt para fallback de horário)
+    const pagDocs = await Entrega.find({
+      padaria,
+      "pagamentos.data": { $gte: ini, $lt: fim },
+    })
+      .select("cliente pagamentos updatedAt")
+      .populate("cliente", "nome")
+      .lean();
+
+    // 2) Problemas HOJE
+    const probDocs = await Entrega.find({
+      padaria,
+      "problemas.data": { $gte: ini, $lt: fim },
+    })
+      .select("cliente problemas")
+      .populate("cliente", "nome")
+      .lean();
+
+    // 3) Entregas concluídas HOJE (usa entregueEm)
+    const conclDocs = await Entrega.find({
+      padaria,
+      entregue: true,
+      entregueEm: { $ne: null, $gte: ini, $lt: fim },
+    })
+      .select("cliente entregueEm")
+      .populate("cliente", "nome")
+      .lean();
+
+    const eventos = [];
+
+    // ---- Pagamentos
+    for (const e of pagDocs) {
+      for (const p of e.pagamentos || []) {
+        const dt = new Date(p.data);
+        if (dt >= ini && dt < fim) {
+          // Se vier sem hora (meia-noite UTC), usa updatedAt da entrega
+          const isDateOnly =
+            dt.getUTCHours() === 0 &&
+            dt.getUTCMinutes() === 0 &&
+            dt.getUTCSeconds() === 0;
+          const horario = isDateOnly && e.updatedAt ? e.updatedAt : p.data;
+
+          eventos.push({
+            id: `${e._id}-pg-${p._id}`,
+            cliente: e.cliente, // objeto populado com { _id, nome }
+            tipo: "Pagamento",
+            horario,
+          });
+        }
+      }
+    }
+
+    // ---- Problemas
+    for (const e of probDocs) {
+      for (const pr of e.problemas || []) {
+        const d = new Date(pr.data);
+        if (d >= ini && d < fim) {
+          eventos.push({
+            id: `${e._id}-pr-${pr._id}`,
+            cliente: e.cliente,
+            tipo: "Problema",
+            horario: pr.data,
+          });
+        }
+      }
+    }
+
+    // ---- Entregas concluídas
+    for (const e of conclDocs) {
+      eventos.push({
+        id: `${e._id}-ok`,
+        cliente: e.cliente,
+        tipo: "Entrega realizada",
+        horario: e.entregueEm,
+      });
+    }
+
+    // ===== Deduplicação de PAGAMENTOS por (cliente + minuto) =====
+    // Resolve o caso de um único pagamento repartido em várias entregas.
+    const pagamentosPorChave = new Map(); // key -> evento mais recente
+    const outrosEventos = [];
+
+    for (const ev of eventos) {
+      const isPagamento = String(ev.tipo || "")
+        .toLowerCase()
+        .includes("pagamento");
+
+      if (!isPagamento) {
+        outrosEventos.push(ev);
+        continue;
+      }
+
+      // cliente pode vir como objeto populado ou string
+      const clienteId =
+        ev?.cliente && typeof ev.cliente === "object"
+          ? String(ev.cliente._id || ev.cliente.id || "")
+          : String(ev.cliente || "");
+
+      const d = new Date(ev.horario);
+      if (Number.isNaN(d.getTime())) {
+        // se a data vier inválida, não tenta deduplicar
+        outrosEventos.push(ev);
+        continue;
+      }
+
+      // normaliza para o MINUTO (zera segundos e ms)
+      d.setSeconds(0, 0);
+      const key = `${clienteId}|${d.toISOString()}`;
+
+      const atual = pagamentosPorChave.get(key);
+      if (!atual || new Date(ev.horario) > new Date(atual.horario)) {
+        pagamentosPorChave.set(key, ev);
+      }
+    }
+
+    const compactados = [...outrosEventos, ...pagamentosPorChave.values()];
+
+    // Ordena por mais recente e limita
+    compactados.sort((a, b) => new Date(b.horario) - new Date(a.horario));
+    return res.json({ eventos: compactados.slice(0, 20) });
+  } catch (erro) {
+    return res.status(500).json({
+      erro: "Erro ao buscar notificações recentes",
+      detalhes: erro.message,
+    });
   }
 };

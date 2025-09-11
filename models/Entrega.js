@@ -1,11 +1,9 @@
+// models/Entrega.js
 const mongoose = require("mongoose");
 
 /* ---------------- Subschemas ---------------- */
-
 const ProdutoEntregaSchema = new mongoose.Schema(
   {
-    // Para compatibilidade com dados antigos, permitimos tanto nome direto
-    // quanto uma referência opcional ao Produto.
     produto: { type: mongoose.Schema.Types.ObjectId, ref: "Produto" }, // opcional
     nome: { type: String, required: true, trim: true },
     quantidade: { type: Number, required: true, min: 1 },
@@ -34,7 +32,6 @@ const ProblemaSchema = new mongoose.Schema(
 );
 
 /* ---------------- Schema principal ---------------- */
-
 const EntregaSchema = new mongoose.Schema(
   {
     cliente: {
@@ -42,22 +39,13 @@ const EntregaSchema = new mongoose.Schema(
       ref: "Cliente",
       required: true,
     },
-
-    endereco: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-
-    horaPrevista: {
-      type: Date,
-      required: false,
-    },
+    endereco: { type: String, required: true, trim: true },
+    horaPrevista: { type: Date, required: false },
 
     entregador: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Usuario",
-      required: false, // é definido quando o entregador assume a rota
+      required: false,
     },
 
     padaria: {
@@ -66,10 +54,7 @@ const EntregaSchema = new mongoose.Schema(
       required: true,
     },
 
-    ativa: {
-      type: Boolean,
-      default: true,
-    },
+    ativa: { type: Boolean, default: true },
 
     produtos: {
       type: [ProdutoEntregaSchema],
@@ -80,27 +65,18 @@ const EntregaSchema = new mongoose.Schema(
       required: true,
     },
 
-    entregue: {
-      type: Boolean,
-      default: false,
-    },
+    entregue: { type: Boolean, default: false },
 
-    pago: {
-      type: Boolean,
-      default: false,
-    },
+    // carimbo de quando a entrega foi concluída (não muda com pagamentos)
+    entregueEm: { type: Date, default: null },
 
-    pagamentos: {
-      type: [PagamentoSchema],
-      default: [],
-    },
+    pago: { type: Boolean, default: false },
 
-    problemas: {
-      type: [ProblemaSchema],
-      default: [],
-    },
+    pagamentos: { type: [PagamentoSchema], default: [] },
 
-    // Coordenadas do destino; opcionais aqui para não travar fluxos avulsos.
+    problemas: { type: [ProblemaSchema], default: [] },
+
+    // Coordenadas do destino
     location: {
       lat: { type: Number, required: false },
       lng: { type: Number, required: false },
@@ -109,20 +85,25 @@ const EntregaSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+/* ---------------- Hooks ---------------- */
+// Preenche entregueEm na primeira vez que marcar como concluída
+EntregaSchema.pre("save", function (next) {
+  if (
+    this.isModified("entregue") &&
+    this.entregue === true &&
+    !this.entregueEm
+  ) {
+    this.entregueEm = new Date();
+  }
+  next();
+});
+
 /* ---------------- Índices úteis ---------------- */
-
-// Consultas por data e padaria (dashboards e painéis)
 EntregaSchema.index({ padaria: 1, createdAt: -1 });
-
-// Filtro comum: status + padaria no dia
 EntregaSchema.index({ padaria: 1, entregue: 1, pago: 1, createdAt: -1 });
-
-// Para listar “minhas entregas” rapidamente
 EntregaSchema.index({ entregador: 1, entregue: 1, createdAt: -1 });
-
-// Para buscas por cliente no dia
 EntregaSchema.index({ cliente: 1, createdAt: -1 });
+EntregaSchema.index({ padaria: 1, entregueEm: -1 }); // para buscas por concluídas recentemente
 
 /* ---------------- Export ---------------- */
-
 module.exports = mongoose.model("Entrega", EntregaSchema);

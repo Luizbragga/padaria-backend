@@ -64,7 +64,7 @@ router.put(
 router.post(
   "/:id/registrar-pagamento",
   autenticar,
-  autorizar("entregador", "gerente"),
+  autorizar("entregador", "gerente", "atendente", "admin"),
   entregasController.registrarPagamento
 );
 

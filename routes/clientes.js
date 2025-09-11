@@ -55,7 +55,7 @@ router.get(
 // Listar clientes (admin ou gerente) — aceita ?padaria=<id>&rota=A&busca=...
 router.get(
   "/",
-  autorizar("admin", "gerente"),
+  autorizar("admin", "gerente", "atendente"),
   clientesController.listarClientes
 );
 

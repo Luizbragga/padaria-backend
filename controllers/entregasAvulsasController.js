@@ -204,7 +204,10 @@ exports.registrarPagamento = async (req, res) => {
     entrega.pago = true;
     entrega.entregue = true; // ✅ pagamento conclui a entrega
     if (!entrega.padaria) entrega.padaria = OID(padariaDoReq(req));
-    if (!entrega.entregador) entrega.entregador = OID(req.usuario.id);
+    // Só define entregador automaticamente se quem registra é um ENTREGADOR
+    if (!entrega.entregador && role(req) === "entregador") {
+      entrega.entregador = OID(req.usuario.id);
+    }
 
     await entrega.save();
     return res.json({ mensagem: "Pagamento registrado com sucesso", entrega });

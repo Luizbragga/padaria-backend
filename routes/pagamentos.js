@@ -50,7 +50,7 @@ function sumPagamentos(entrega) {
 router.post(
   "/cliente/:clienteId",
   autenticar,
-  autorizar("admin", "gerente"),
+  autorizar("admin", "gerente", "atendente"),
   async (req, res) => {
     try {
       const padariaId = req.usuario?.padaria;
