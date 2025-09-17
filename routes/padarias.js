@@ -6,6 +6,7 @@ const Joi = require("joi");
 
 const Padaria = require("../models/Padaria");
 const padariasController = require("../controllers/padariasController");
+const { deletePadariaCascade } = require("../controllers/padariasCascade");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 
@@ -140,23 +141,47 @@ router.patch(
   }
 );
 
-// Deletar padaria (ADMIN)
+// Deletar padaria (ADMIN) — com exclusão em cascata
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!garantirObjectIdValido(id, res)) return;
+  const { id } = req.params;
+  if (!garantirObjectIdValido(id, res)) return;
 
-    const padaria = await Padaria.findById(id);
-    if (!padaria) {
+  try {
+    const { usedTransaction, results } = await deletePadariaCascade(id);
+
+    // resumo amigável (apenas contagens)
+    const resumo = {
+      entregas: results.entregas?.deletedCount ?? 0,
+      entregasAvulsas: results.entregasAvulsas?.deletedCount ?? 0,
+      ajustesPontuais: results.ajustesPontuais?.deletedCount ?? 0,
+      solicitacoes: results.solicitacoes?.deletedCount ?? 0,
+      rotasDia: results.rotasDia?.deletedCount ?? 0,
+      rotasOverride: results.rotasOverride?.deletedCount ?? 0,
+      saldoDiario: results.saldoDiario?.deletedCount ?? 0,
+      produtos: results.produtos?.deletedCount ?? 0,
+      clientes: results.clientes?.deletedCount ?? 0,
+      config: results.config?.deletedCount ?? 0,
+      refreshTokens: results.refreshTokens?.deletedCount ?? 0,
+      rotasEntregador: results.rotasEntregador?.deletedCount ?? 0,
+      usuarios: results.usuarios?.deletedCount ?? 0,
+      padaria: results.padaria?.deletedCount ?? 0,
+    };
+
+    return res.json({
+      mensagem: "Padaria e dados vinculados excluídos com sucesso.",
+      usedTransaction,
+      resumo,
+    });
+  } catch (err) {
+    if (err?.code === "PADARIA_NOT_FOUND") {
       return res.status(404).json({ erro: "Padaria não encontrada." });
     }
-
-    // (opcional) aqui daria para checar vínculos (usuarios/entregas) antes de excluir
-    await Padaria.deleteOne({ _id: id });
-
-    return res.json({ mensagem: "Padaria excluída permanentemente." });
-  } catch (err) {
-    return res.status(500).json({ erro: "Erro ao excluir padaria." });
+    if (err?.code === "INVALID_ID") {
+      return res.status(400).json({ erro: "ID de padaria inválido." });
+    }
+    return res
+      .status(500)
+      .json({ erro: "Erro ao excluir padaria.", detalhe: err?.message });
   }
 });
 

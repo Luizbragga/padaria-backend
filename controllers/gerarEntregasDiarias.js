@@ -2,6 +2,7 @@
 const Cliente = require("../models/Cliente");
 const Entrega = require("../models/Entrega");
 const Produto = require("../models/Produto");
+const Padaria = require("../models/Padaria");
 const logger = require("../logs/utils/logger");
 
 function diaDaSemanaAtual() {
@@ -32,6 +33,17 @@ async function gerarEntregasDoDia() {
   const diaSemana = diaDaSemanaAtual();
   const { ini, fim } = intervaloHojeLocal();
 
+  // 0) Considerar apenas padarias ativas
+  const padariasAtivas = await Padaria.find({ ativa: true })
+    .select("_id")
+    .lean();
+  const padariaIdsAtivas = padariasAtivas.map((p) => p._id);
+
+  if (!padariaIdsAtivas.length) {
+    logger.info(`[${dataExecucao}] Nenhuma padaria ativa. Nada a gerar.`);
+    return;
+  }
+
   logger.info(
     `[${dataExecucao}] 🚚 Iniciando geração de entregas do dia (${diaSemana})`
   );
@@ -40,6 +52,7 @@ async function gerarEntregasDoDia() {
     // 1) Clientes ativos com padrão hoje
     const clientes = await Cliente.find({
       ativo: true,
+      padaria: { $in: padariaIdsAtivas },
       [`padraoSemanal.${diaSemana}`]: { $exists: true, $ne: [] },
     })
       .select("_id nome endereco padaria location padraoSemanal")
