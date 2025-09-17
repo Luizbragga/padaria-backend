@@ -92,7 +92,7 @@ app.get("/", (req, res) => res.send("Olá, Sistema de Entregas da Padaria!"));
 
 app.use("/login", require("./routes/login"));
 app.use("/token", require("./routes/tokens"));
-
+app.use("/rotas-split", require("./routes/rotasSplitHoje"));
 app.use("/api/usuarios", require("./routes/usuarios"));
 app.use("/padarias", require("./routes/padarias"));
 app.use("/produtos", require("./routes/produtos"));
@@ -108,6 +108,7 @@ app.use("/gerente", require("./routes/gerente"));
 app.use("/admin", require("./routes/admin"));
 app.use("/pagamentos", require("./routes/pagamentos"));
 app.use("/caixa", require("./routes/caixa"));
+app.use("/saldo-diario", require("./routes/saldoDiario"));
 app.use("/teste-protegido", require("./routes/testeProtegido"));
 
 // ===== 404 global (Express 5, sem coringa no path) =====

@@ -2,10 +2,16 @@
 const mongoose = require("mongoose");
 const Cliente = require("../models/Cliente");
 const Padaria = require("../models/Padaria");
+const Produto = require("../models/Produto");
+const ClienteAjustePontual = require("../models/ClienteAjustePontual");
+const SolicitacaoAlteracaoCliente = require("../models/SolicitacaoAlteracaoCliente");
 
 /* ---------------- utils ---------------- */
 const toObjectIdIfValid = (v) =>
   mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : v;
+const toId = (v) =>
+  mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : v;
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 function assertAdmin(req) {
   const role = req?.usuario?.role;
@@ -545,4 +551,80 @@ exports.rotasDistintas = async (req, res) => {
     console.error("rotasDistintas:", e);
     res.status(500).json({ erro: "Erro ao listar rotas." });
   }
+};
+
+/** PUT /clientes/:id/padrao-semanal  (admin ou gerente) */
+exports.setPadraoSemanal = async (req, res) => {
+  const { id } = req.params;
+  const padrao = req.body?.padraoSemanal || {};
+  const cli = await Cliente.findByIdAndUpdate(
+    id,
+    { $set: { padraoSemanal: padrao } },
+    { new: true }
+  );
+  if (!cli) return res.status(404).json({ erro: "Cliente não encontrado" });
+  res.json({ ok: true });
+};
+
+/** POST /clientes/:id/ajuste-pontual  (admin ou gerente)
+ * body: { data: 'YYYY-MM-DD', tipo: 'add'|'replace', itens: [{produto, quantidade, preco?}] }
+ * upsert por (cliente,data)
+ */
+exports.registrarAjustePontual = async (req, res) => {
+  const { id } = req.params;
+  const { data, tipo = "add", itens = [] } = req.body || {};
+  if (!data || !Array.isArray(itens) || itens.length === 0)
+    return res.status(400).json({ erro: "Informe data e itens" });
+
+  const d = new Date(data);
+  d.setHours(0, 0, 0, 0);
+
+  const doc = await ClienteAjustePontual.findOneAndUpdate(
+    { cliente: toId(id), data: d },
+    {
+      $set: {
+        padaria: toId(req.query.padaria || req.usuario?.padaria),
+        cliente: toId(id),
+        data: d,
+        tipo,
+        itens: itens.map((i) => ({
+          produto: toId(i.produto),
+          quantidade: Number(i.quantidade) || 0,
+          preco: i.preco != null ? Number(i.preco) : undefined,
+        })),
+        createdBy: req.usuario?._id,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  res.json({ ok: true, ajuste: doc });
+};
+
+/** GET /clientes/:id/ajustes?ini=YYYY-MM-DD&fim=YYYY-MM-DD */
+exports.listarAjustesPontuais = async (req, res) => {
+  const { id } = req.params;
+  const { ini, fim } = req.query;
+  const start = new Date(ini);
+  const end = new Date(fim);
+  const docs = await ClienteAjustePontual.find({
+    cliente: toId(id),
+    data: { $gte: start, $lt: end },
+  })
+    .populate("itens.produto", "nome preco")
+    .lean();
+  res.json({ ajustes: docs });
+};
+
+/** POST /clientes/:id/solicitar-alteracao  (gerente) */
+exports.solicitarAlteracao = async (req, res) => {
+  const { id } = req.params;
+  const padaria = toId(req.query.padaria || req.usuario?.padaria);
+  const dados = req.body?.dados || {};
+  const solicit = await SolicitacaoAlteracaoCliente.create({
+    padaria,
+    cliente: toId(id),
+    solicitante: req.usuario?._id,
+    dados,
+  });
+  res.json({ ok: true, solicitacaoId: solicit._id });
 };

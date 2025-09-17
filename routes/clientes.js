@@ -9,54 +9,78 @@ const autorizar = require("../middlewares/autorizar");
 // todas as rotas de clientes exigem usuário autenticado
 router.use(autenticar);
 
-/** Coleção: padrão semanal de TODOS os clientes da padaria */
+// ===== CRUD básico =====
+router.post("/", autorizar("admin"), clientesController.criarCliente);
+
 router.get(
-  "/padrao-semanal",
-  autorizar("admin", "gerente"),
-  clientesController.padraoSemanalTodos
+  "/",
+  autorizar("admin", "gerente", "atendente"),
+  clientesController.listarClientes
 );
 
-/** Item: padrão semanal de UM cliente */
-router.get(
-  "/:id/padrao-semanal",
-  autorizar("admin", "gerente"),
-  clientesController.padraoSemanalCliente
-);
-
-/** Ficha básica (para o modal do gerente) */
 router.get(
   "/:id/basico",
   autorizar("admin", "gerente"),
   clientesController.getClienteBasico
 );
 
-/** Atualizar apenas observações */
 router.patch(
   "/:id/observacoes",
   autorizar("admin", "gerente"),
   clientesController.atualizarObservacoes
 );
 
-/** Atualização geral de dados básicos (endereço, telefone, rota...) */
 router.patch(
   "/:id",
   autorizar("admin", "gerente"),
   clientesController.atualizarCliente
 );
 
-/** (Opcional) Fallback de GET /clientes/:id -> devolve a ficha básica
- *  Isso ajuda o front caso ele chame /:id direto.
- */
+router.delete("/:id", autorizar("admin"), clientesController.deletarCliente);
+
+// utilitário
 router.get(
-  "/:id",
-  autorizar("admin", "gerente"),
-  clientesController.getClienteBasico
-);
-// Listar clientes (admin ou gerente) — aceita ?padaria=<id>&rota=A&busca=...
-router.get(
-  "/",
+  "/rotas/distintas",
   autorizar("admin", "gerente", "atendente"),
-  clientesController.listarClientes
+  clientesController.rotasDistintas
+);
+
+// ===== Padrão semanal e ajustes pontuais (admin/gerente) =====
+router.get(
+  "/padrao-semanal",
+  autorizar("admin", "gerente"),
+  clientesController.padraoSemanalTodos
+);
+
+router.get(
+  "/:id/padrao-semanal",
+  autorizar("admin", "gerente"),
+  clientesController.padraoSemanalCliente
+);
+
+router.put(
+  "/:id/padrao-semanal",
+  autorizar("admin", "gerente"),
+  clientesController.setPadraoSemanal
+);
+
+router.post(
+  "/:id/ajuste-pontual",
+  autorizar("admin", "gerente"),
+  clientesController.registrarAjustePontual
+);
+
+router.get(
+  "/:id/ajustes",
+  autorizar("admin", "gerente"),
+  clientesController.listarAjustesPontuais
+);
+
+// ===== Solicitação de alteração cadastral (vai para o admin) =====
+router.post(
+  "/:id/solicitar-alteracao",
+  autorizar("gerente", "admin"),
+  clientesController.solicitarAlteracao
 );
 
 module.exports = router;

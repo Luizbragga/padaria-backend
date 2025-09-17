@@ -12,24 +12,46 @@ router.get("/_ping", (req, res) => res.json({ ok: true }));
 // todas as rotas daqui exigem autenticação
 router.use(autenticar);
 
-// admin ou gerente
+// perfis
 const podeVer = autorizar("admin", "gerente");
+const podeVerLeve = autorizar("admin", "gerente", "atendente");
 
-// helper: garante que o handler é função e dá erro legível se não for
+/**
+ * Envolve um handler do controller:
+ * - Se existir, devolve um wrapper async com catch -> next()
+ * - Se NÃO existir, loga um aviso e devolve 501 (evita cair o servidor)
+ */
 function ensureFn(name) {
-  const fn = analitico[name];
+  const fn = analitico?.[name];
   if (typeof fn !== "function") {
-    throw new TypeError(
-      `[analitico.routes] Handler "${name}" não é function (é ${typeof fn}).`
+    console.warn(
+      `[analitico.routes] Handler "${name}" não é function (é ${typeof fn}). ` +
+        `A rota ficará ativa com 501 Not Implemented até corrigir o export em controllers/analiticoController.js.`
     );
+    return (_req, res) =>
+      res
+        .status(501)
+        .json({ erro: `Handler "${name}" não implementado no controller.` });
   }
-  return fn;
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
 }
 
 /** === Rotas === */
+
+// A Receber (mensal, com cortes/pendências por mês anterior etc.)
 router.get("/a-receber", podeVer, ensureFn("aReceberMensal"));
 
-router.get("/entregas-do-dia", podeVer, ensureFn("listarEntregasDoDia"));
+// Pendências (Atrasos)
+router.get("/pendencias-anuais", podeVer, ensureFn("pendenciasAnuais"));
+router.get("/pendencias-do-mes", podeVer, ensureFn("pendenciasDoMes"));
+
+// Avulsas do mês
+router.get("/avulsas", podeVer, ensureFn("avulsasDoMes"));
+
+// Entregas / Analíticos diversos
+router.get("/entregas-do-dia", podeVerLeve, ensureFn("listarEntregasDoDia"));
 router.get("/entregas-por-dia", podeVer, ensureFn("entregasPorDia"));
 router.get("/inadimplencia", podeVer, ensureFn("inadimplencia"));
 router.get(
@@ -52,7 +74,7 @@ router.get(
   ensureFn("mediaProdutosPorEntrega")
 );
 router.get("/faturamento-mensal", podeVer, ensureFn("faturamentoMensal"));
-router.get("/resumo-financeiro", podeVer, ensureFn("resumoFinanceiro"));
+router.get("/resumo-financeiro", podeVerLeve, ensureFn("resumoFinanceiro"));
 
 router.get("/por-padaria", autorizar("admin"), ensureFn("entregasPorPadaria"));
 
@@ -63,14 +85,16 @@ router.get(
 );
 router.get(
   "/localizacao-entregadores",
-  podeVer,
+  podeVer, // localização é sensível → sem atendente
   ensureFn("obterLocalizacaoEntregadores")
 );
-router.get("/entregas-tempo-real", podeVer, ensureFn("entregasTempoReal"));
-router.get("/pagamentos", podeVer, ensureFn("pagamentosDetalhados"));
-router.get("/notificacoes-recentes", podeVer, ensureFn("notificacoesRecentes"));
+router.get("/entregas-tempo-real", podeVerLeve, ensureFn("entregasTempoReal"));
 
-// Só mantenha esta se o controller tiver mesmo o handler:
-/// router.get("/avulsas", podeVer, ensureFn("avulsasDoMes"));
+router.get("/pagamentos", podeVer, ensureFn("pagamentosDetalhados"));
+router.get(
+  "/notificacoes-recentes",
+  podeVerLeve,
+  ensureFn("notificacoesRecentes")
+);
 
 module.exports = router;

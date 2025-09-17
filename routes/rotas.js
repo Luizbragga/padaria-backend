@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
-
+const RotaOverride = require("../models/RotaOverride");
 const Entrega = require("../models/Entrega");
 const Cliente = require("../models/Cliente");
 const RotaDia = require("../models/RotaDia");
@@ -33,6 +33,35 @@ const STALE_MINUTES = 10; // sem ping por X min ⇒ permite reassumir
 
 // todas as rotas daqui exigem usuário autenticado
 router.use(autenticar);
+async function getClienteIdsConsiderandoOverride(padaria, rota) {
+  const data = dataHojeLocal();
+
+  const all = await RotaOverride.find({ padaria, data }).lean();
+  const movedTo = new Set(
+    all
+      .filter((o) => String(o.novaRota).toUpperCase() === rota)
+      .map((o) => String(o.cliente))
+  );
+  const movedOut = new Set(
+    all
+      .filter((o) => String(o.antigaRota).toUpperCase() === rota)
+      .map((o) => String(o.cliente))
+  );
+
+  // clientes originalmente da rota (mas removendo os que foram movidos para fora)
+  const base = await Cliente.find({ padaria, rota }, { _id: 1 }).lean();
+  const keepBase = base
+    .filter((c) => !movedOut.has(String(c._id)))
+    .map((c) => c._id);
+
+  // adiciona os que foram deslocados PARA esta rota
+  for (const id of movedTo) {
+    try {
+      keepBase.push(new mongoose.Types.ObjectId(id));
+    } catch {}
+  }
+  return keepBase;
+}
 
 /* =====================================
    GET /rotas/disponiveis  (somente entregador)
@@ -101,7 +130,6 @@ router.get("/disponiveis", autorizar("entregador"), async (req, res) => {
         { padaria, rota },
         { _id: 1 }
       ).lean();
-      const clienteIds = idsClientes.map((c) => c._id);
 
       // total pendentes (do dia) nessa rota
       const total = clienteIds.length
@@ -259,7 +287,6 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
       { padaria, rota },
       { _id: 1 }
     ).lean();
-    const clienteIds = idsClientes.map((c) => c._id);
 
     if (clienteIds.length) {
       const orOwners = [{ entregador: null }, { entregador: usuarioId }];
@@ -340,7 +367,6 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
       { padaria, rota },
       { _id: 1 }
     ).lean();
-    const clienteIds = idsClientes.map((c) => c._id);
 
     if (clienteIds.length) {
       await Entrega.updateMany(
