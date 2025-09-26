@@ -126,10 +126,8 @@ router.get("/disponiveis", autorizar("entregador"), async (req, res) => {
     const saida = [];
     for (const rota of rotas) {
       // clientes dessa rota
-      const idsClientes = await Cliente.find(
-        { padaria, rota },
-        { _id: 1 }
-      ).lean();
+      const clientes = await Cliente.find({ padaria, rota }, { _id: 1 }).lean();
+      const clienteIds = clientes.map((c) => c._id);
 
       // total pendentes (do dia) nessa rota
       const total = clienteIds.length
@@ -276,17 +274,15 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
     }
     await lock.save();
 
-    // >>> marca a rota no próprio usuário (para colorir o pin no mapa do gerente)
+    // marca rota atual no usuário (para o mapa do gerente)
     await Usuario.findByIdAndUpdate(usuarioId, { rotaAtual: rota });
 
-    // ATRIBUIR ENTREGAS (apenas do dia):
-    //  - se não stale: somente as com entregador: null ou já minhas
-    //  - se stale: também as do antigo dono
+    // Atribuir ENTREGAS do dia nessa rota
     const { ini, fim } = hojeRange();
-    const idsClientes = await Cliente.find(
-      { padaria, rota },
-      { _id: 1 }
-    ).lean();
+
+    // >>> CORREÇÃO AQUI:
+    const clientes = await Cliente.find({ padaria, rota }, { _id: 1 }).lean();
+    const clienteIds = clientes.map((c) => c._id);
 
     if (clienteIds.length) {
       const orOwners = [{ entregador: null }, { entregador: usuarioId }];
@@ -306,7 +302,7 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
                 { horaPrevista: { $gte: ini, $lt: fim } },
               ],
             },
-            { $or: orOwners }, // <= (null | usuário atual | staleHolderId)
+            { $or: orOwners },
           ],
         },
         { $set: { entregador: usuarioId } }
@@ -363,10 +359,8 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
 
     // desatribui entregas pendentes desse entregador (do dia) nessa rota
     const { ini, fim } = hojeRange();
-    const idsClientes = await Cliente.find(
-      { padaria, rota },
-      { _id: 1 }
-    ).lean();
+    const clientes = await Cliente.find({ padaria, rota }, { _id: 1 }).lean();
+    const clienteIds = clientes.map((c) => c._id);
 
     if (clienteIds.length) {
       await Entrega.updateMany(
@@ -380,9 +374,9 @@ router.post("/release", autorizar("entregador"), async (req, res) => {
             { data: { $gte: ini, $lt: fim } },
             { horaPrevista: { $gte: ini, $lt: fim } },
           ],
-          entregador: usuarioId, // << apenas as minhas
+          entregador: usuarioId,
         },
-        { $set: { entregador: null } } // << desatribui
+        { $set: { entregador: null } }
       );
     }
 

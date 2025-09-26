@@ -1,3 +1,4 @@
+// controllers/entregasController.js
 const mongoose = require("mongoose");
 const Entrega = require("../models/Entrega");
 const {
@@ -102,12 +103,18 @@ exports.listarEntregas = async (req, res) => {
 
     const filtro = { padaria: OID(padaria) };
 
-    if (cliente) filtro.cliente = { $regex: cliente, $options: "i" };
+    // cliente: só filtramos por ObjectId válido;
+    // (filtro por nome exigiria aggregate/lookup e não é o objetivo aqui)
+    if (cliente && mongoose.Types.ObjectId.isValid(String(cliente))) {
+      filtro.cliente = OID(cliente);
+    }
+
     if (produto) filtro["produtos.nome"] = { $regex: produto, $options: "i" };
     if (pago !== undefined) filtro.pago = String(pago) === "true";
     if (entregue !== undefined) filtro.entregue = String(entregue) === "true";
     if (data) {
       const dia = new Date(data);
+      dia.setHours(0, 0, 0, 0);
       const proximoDia = new Date(dia);
       proximoDia.setDate(dia.getDate() + 1);
       filtro.createdAt = { $gte: dia, $lt: proximoDia };
@@ -268,7 +275,7 @@ exports.concluirEntrega = async (req, res) => {
   }
 };
 
-// Relatar problema (entregador: só a própria; gerente/admin: qualquer da padaria)
+// Relatar problema
 exports.relatarProblema = async (req, res) => {
   try {
     const { tipo, descricao } = req.body;
@@ -281,7 +288,6 @@ exports.relatarProblema = async (req, res) => {
     if (role(req) === "entregador") {
       filtro.entregador = OID(req.usuario.id);
     } else {
-      // garante mesma padaria
       const padaria = padariaDoReq(req);
       if (!padaria)
         return res.status(400).json({ mensagem: "Padaria não informada" });
@@ -336,9 +342,8 @@ exports.registrarPagamento = async (req, res) => {
       data: new Date(),
     });
     entrega.pago = true;
-    entrega.entregue = true; // ✅ pagamento conclui a entrega
+    entrega.entregue = true;
     if (!entrega.padaria) entrega.padaria = OID(padariaDoReq(req));
-    // Só define entregador automaticamente se quem registra é um ENTREGADOR
     if (!entrega.entregador && role(req) === "entregador") {
       entrega.entregador = OID(req.usuario.id);
     }
@@ -352,7 +357,7 @@ exports.registrarPagamento = async (req, res) => {
   }
 };
 
-// Desativar entrega (admin/gerente)
+// Desativar entrega
 exports.desativarEntrega = async (req, res) => {
   try {
     if (role(req) === "entregador") {
@@ -381,7 +386,7 @@ exports.desativarEntrega = async (req, res) => {
   }
 };
 
-// Reutilizar entrega (copia location também)
+// Reutilizar entrega (corrige location)
 exports.reutilizarEntrega = async (req, res) => {
   try {
     const entrega = await Entrega.findById(req.params.id);
@@ -390,7 +395,6 @@ exports.reutilizarEntrega = async (req, res) => {
         .status(404)
         .json({ mensagem: "Entrega original não encontrada" });
 
-    // gerente/admin somente dentro da padaria
     if (
       role(req) !== "admin" &&
       String(entrega.padaria) !== String(req.usuario.padaria)
@@ -404,7 +408,7 @@ exports.reutilizarEntrega = async (req, res) => {
       entregador: entrega.entregador,
       produtos: entrega.produtos,
       padaria: entrega.padaria,
-      location: entrega.location, // 👈 mantém destino
+      location: entrega.location, // ✅ corrige variável
       entregue: false,
       pago: false,
       pagamentos: [],
@@ -431,12 +435,13 @@ exports.listarEntregasDoDia = async (req, res) => {
       return res.status(400).json({ mensagem: "Padaria não informada" });
 
     const hoje = new Date();
-    const inicio = new Date(hoje.setHours(0, 0, 0, 0));
-    const fim = new Date(hoje.setHours(23, 59, 59, 999));
+    hoje.setHours(0, 0, 0, 0);
+    const amanha = new Date(hoje);
+    amanha.setDate(hoje.getDate() + 1);
 
     const entregas = await Entrega.find({
       padaria: OID(padaria),
-      createdAt: { $gte: inicio, $lt: fim },
+      createdAt: { $gte: hoje, $lt: amanha },
     })
       .populate("entregador", "nome")
       .populate("cliente", "nome");
@@ -465,7 +470,7 @@ exports.listarEntregasDoDia = async (req, res) => {
   }
 };
 
-/* ===== pequenas stats simples (mantidas) ===== */
+/* ===== pequenas stats ===== */
 exports.contarEntregas = async (req, res) => {
   try {
     const padaria = padariaDoReq(req);
@@ -500,11 +505,11 @@ exports.contarPorData = async (req, res) => {
 
     const inicio = new Date(data);
     inicio.setHours(0, 0, 0, 0);
-    const fim = new Date(data);
-    fim.setHours(23, 59, 59, 999);
+    const fim = new Date(inicio);
+    fim.setDate(inicio.getDate() + 1);
 
     const padaria = padariaDoReq(req);
-    const filtro = { createdAt: { $gte: inicio, $lte: fim } };
+    const filtro = { createdAt: { $gte: inicio, $lt: fim } };
     if (padaria) filtro.padaria = OID(padaria);
 
     const total = await Entrega.countDocuments(filtro);
@@ -523,7 +528,9 @@ exports.contarPorCliente = async (req, res) => {
       return res.status(400).json({ mensagem: "Cliente obrigatório" });
 
     const padaria = padariaDoReq(req);
-    const filtro = { cliente: { $regex: cliente, $options: "i" } };
+    const filtro = mongoose.Types.ObjectId.isValid(String(cliente))
+      ? { cliente: OID(cliente) }
+      : {};
     if (padaria) filtro.padaria = OID(padaria);
 
     const total = await Entrega.countDocuments(filtro);
@@ -572,7 +579,8 @@ exports.contarPorStatus = async (req, res) => {
       .json({ mensagem: "Erro ao contar por status", erro: error.message });
   }
 };
-// controllers/entregasController.js (ADICIONE)
+
+// Lista SOMENTE as entregas do entregador logado (usado em /entregas/minhas)
 exports.listarMinhasEntregas = async (req, res) => {
   try {
     const { id: usuarioId } = req.usuario;
@@ -586,9 +594,10 @@ exports.listarMinhasEntregas = async (req, res) => {
     const minhas = await Entrega.find({
       entregador: usuarioId,
       createdAt: { $gte: ini, $lt: fim },
-      // entregue: false, // 👈 descomente se quiser mostrar só as pendentes
     })
       .sort({ createdAt: -1 })
+      .populate("cliente", "nome endereco location observacoes")
+      .populate("entregador", "nome")
       .lean();
 
     res.json(minhas);

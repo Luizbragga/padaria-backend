@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const Joi = require("joi");
-
+const Cliente = require("../models/Cliente");
 const Padaria = require("../models/Padaria");
 const padariasController = require("../controllers/padariasController");
 const { deletePadariaCascade } = require("../controllers/padariasCascade");
@@ -16,8 +16,14 @@ const autorizar = require("../middlewares/autorizar");
 const criarPadariaSchema = Joi.object({
   nome: Joi.string().trim().min(2).max(120).required(),
   cidade: Joi.string().trim().min(2).max(120).required(),
-  estado: Joi.string().trim().min(1).max(60).required(),
-  ativa: Joi.boolean().optional(), // default no model já é true
+  freguesia: Joi.string().trim().allow("").max(120).optional(),
+  ativa: Joi.boolean().optional(),
+  rotasDisponiveis: Joi.alternatives()
+    .try(
+      Joi.array().items(Joi.string().trim().min(1).max(20)).max(50),
+      Joi.string().allow("")
+    )
+    .optional(),
 });
 
 /* Pequeno helper pra validar ObjectId */
@@ -43,11 +49,31 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
         .json({ mensagem: "Dados inválidos", erro: error.message });
     }
 
-    // (opcional) evitar duplicidade por nome+cidade+estado
-    const existe = await Padaria.findOne({
+    // normalizar rotasDisponiveis (array ou "A,B,C")
+    let rotasDisponiveis = [];
+    if (Array.isArray(value.rotasDisponiveis)) {
+      rotasDisponiveis = value.rotasDisponiveis;
+    } else if (typeof value.rotasDisponiveis === "string") {
+      rotasDisponiveis = value.rotasDisponiveis
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+
+    // montar payload final (model sanitiza/uppercase/únicos)
+    const payload = {
       nome: value.nome,
       cidade: value.cidade,
-      estado: value.estado,
+      freguesia: value.freguesia || "",
+      ativa: value.ativa,
+      rotasDisponiveis,
+    };
+
+    // evitar duplicidade por nome+cidade+estado
+    const existe = await Padaria.findOne({
+      nome: payload.nome,
+      cidade: payload.cidade,
+      estado: payload.estado,
     }).lean();
 
     if (existe) {
@@ -56,7 +82,7 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
         .json({ mensagem: "Já existe uma padaria com esses dados." });
     }
 
-    const novaPadaria = await Padaria.create(value);
+    const novaPadaria = await Padaria.create(payload);
     return res.status(201).json(novaPadaria);
   } catch (erro) {
     return res
@@ -184,5 +210,36 @@ router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
       .json({ erro: "Erro ao excluir padaria.", detalhe: err?.message });
   }
 });
+
+// GET /padarias/:id/rotas  -> todas as rotas disponíveis para cadastro
+router.get(
+  "/:id/rotas",
+  autenticar,
+  autorizar("admin", "gerente"),
+  async (req, res) => {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ erro: "ID inválido." });
+    }
+
+    const pad = await Padaria.findById(id).lean();
+    if (!pad) return res.status(404).json({ erro: "Padaria não encontrada." });
+
+    // 1) rotas declaradas na padaria
+    const fromPad = (pad.rotasDisponiveis || [])
+      .map((s) => String(s).trim().toUpperCase())
+      .filter(Boolean);
+
+    // 2) rotas já usadas por clientes
+    const fromCli = (await Cliente.distinct("rota", { padaria: id }))
+      .map((s) => String(s).trim().toUpperCase())
+      .filter(Boolean);
+
+    // união + ordenação
+    const nomes = Array.from(new Set([...fromPad, ...fromCli])).sort();
+
+    res.json(nomes);
+  }
+);
 
 module.exports = router;

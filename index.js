@@ -6,46 +6,47 @@ const app = express();
 const logger = require("./logs/utils/logger");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const cors = require("cors");
+const cors = require("cors"); // ✅ apenas UMA importação
 const cron = require("node-cron");
 const rateLimit = require("express-rate-limit");
+
+// se usar ngrok/proxy, ajuda:
+app.set("trust proxy", 1);
 
 // ===== Banco =====
 const conectarBanco = require("./config/database");
 conectarBanco();
 
-// ===== CORS =====
-const allowedOrigins = ["http://localhost:5173", "http://127.0.0.1:5173"];
+/* ===================== CORS ===================== */
+
+// permite localhost e QUALQUER subdomínio do ngrok-free.app
+function isAllowedOrigin(origin = "") {
+  if (!origin) return true; // curl / apps nativas
+  if (origin === "http://localhost:5173") return true;
+  if (origin === "http://127.0.0.1:5173") return true;
+  return /^https:\/\/[a-z0-9-]+\.ngrok-free\.app$/i.test(origin);
+}
+
 const corsOptions = {
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) callback(null, true);
-    else callback(new Error("Not allowed by CORS"));
+  origin(origin, cb) {
+    cb(null, isAllowedOrigin(origin)); // true/false
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "ngrok-skip-browser-warning",
+  ],
   credentials: false,
+  optionsSuccessStatus: 204,
 };
+
 app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 
-// Preflight universal
-app.use((req, res, next) => {
-  if (req.method === "OPTIONS") {
-    const origin = req.headers.origin;
-    if (!origin || allowedOrigins.includes(origin)) {
-      res.header("Access-Control-Allow-Origin", origin || allowedOrigins[0]);
-      res.header("Vary", "Origin");
-      res.header(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-      );
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-      return res.sendStatus(204);
-    }
-  }
-  next();
-});
+/* ================================================= */
 
-// ===== Middlewares =====
+/* ================== Middlewares ================== */
 app.use(express.json());
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(morgan("dev"));
@@ -58,8 +59,9 @@ const limiter = rateLimit({
   },
 });
 app.use(limiter);
+/* ================================================= */
 
-// ===== CRON (opcional) =====
+/* ======================= CRON ==================== */
 let gerarEntregasDoDia = null;
 try {
   ({ gerarEntregasDoDia } = require("./controllers/gerarEntregasDiarias"));
@@ -86,39 +88,74 @@ if (typeof gerarEntregasDoDia === "function") {
     logger.error("Erro ao gerar entregas no boot:", e)
   );
 }
+/* ================================================= */
 
-// ===== Rotas =====
-app.get("/", (req, res) => res.send("Olá, Sistema de Entregas da Padaria!"));
+/* ======================= Rotas =================== */
+app.get("/", (_req, res) => res.send("Olá, Sistema de Entregas da Padaria!"));
+// === Preflight CORS mais permissivo (cole ANTES das rotas) ===
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "*";
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
 
-app.use("/login", require("./routes/login"));
-app.use("/token", require("./routes/tokens"));
-app.use("/rotas-split", require("./routes/rotasSplitHoje"));
-app.use("/api/usuarios", require("./routes/usuarios"));
-app.use("/padarias", require("./routes/padarias"));
-app.use("/produtos", require("./routes/produtos"));
-app.use("/api/clientes", require("./routes/clientes")); // atenção: prefixo /api
-app.use("/entregas", require("./routes/entregas"));
-app.use("/entregas-avulsas", require("./routes/entregasAvulsas"));
-app.use("/dev", require("./routes/dev"));
-app.use("/rotas", require("./routes/rotas"));
-app.use("/rota-entregador", require("./routes/rotaEntregador"));
-app.use("/analitico", require("./routes/analitico"));
-app.use("/config", require("./routes/config"));
-app.use("/gerente", require("./routes/gerente"));
-app.use("/admin", require("./routes/admin"));
-app.use("/pagamentos", require("./routes/pagamentos"));
-app.use("/caixa", require("./routes/caixa"));
-app.use("/saldo-diario", require("./routes/saldoDiario"));
-app.use("/teste-protegido", require("./routes/testeProtegido"));
+  if (req.method === "OPTIONS") {
+    // libera todos os métodos usuais
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
 
-// ===== 404 global (Express 5, sem coringa no path) =====
-app.use((req, res) => {
-  res.status(404).json({ erro: "Rota não encontrada." });
+    // MUITO IMPORTANTE: ecoa exatamente os headers solicitados no preflight
+    const reqHeaders = req.headers["access-control-request-headers"];
+    res.header(
+      "Access-Control-Allow-Headers",
+      reqHeaders || "Authorization, Content-Type, ngrok-skip-browser-warning"
+    );
+
+    // se você não usa cookies, mantenha credentials false
+    // res.header("Access-Control-Allow-Credentials", "false");
+
+    return res.sendStatus(204);
+  }
+
+  next();
 });
 
-// ===== Start =====
+app.use("/api/login", require("./routes/login"));
+app.use("/api/token", require("./routes/tokens"));
+app.use("/api/rotas-split", require("./routes/rotasSplitHoje"));
+app.use("/api/usuarios", require("./routes/usuarios"));
+app.use("/api/padarias", require("./routes/padarias"));
+app.use("/api/produtos", require("./routes/produtos"));
+app.use("/api/clientes", require("./routes/clientes"));
+app.use("/api/entregas", require("./routes/entregas"));
+app.use("/api/entregas-avulsas", require("./routes/entregasAvulsas"));
+app.use("/api/dev", require("./routes/dev"));
+app.use("/api/rotas", require("./routes/rotas"));
+app.use("/api/rota-entregador", require("./routes/rotaEntregador"));
+app.use("/api/analitico", (req, _res, next) => {
+  console.log("[ANALITICO HIT]", req.method, req.path);
+  next();
+});
+app.use("/api/analitico", require("./routes/analitico"));
+app.use("/api/config", require("./routes/config"));
+app.use("/api/gerente", require("./routes/gerente"));
+app.use("/api/admin", require("./routes/admin"));
+app.use("/api/pagamentos", require("./routes/pagamentos"));
+app.use("/api/caixa", require("./routes/caixa"));
+app.use("/api/saldo-diario", require("./routes/saldoDiario"));
+app.use("/api/teste-protegido", require("./routes/testeProtegido"));
+
+/* ======================= 404 ===================== */
+app.use((_req, res) => {
+  res.status(404).json({ erro: "Rota não encontrada." });
+});
+/* ================================================= */
+
+/* ======================= Start =================== */
 const PORT = process.env.PORT || 4001;
 app.listen(PORT, () => {
   logger.info(`Servidor rodando na porta ${PORT}`);
   logger.info("Servidor iniciado");
 });
+/* ================================================= */

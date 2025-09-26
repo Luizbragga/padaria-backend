@@ -1,4 +1,4 @@
-// routes/rota-entregador.js
+// routes/rotaEntregador.js
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
@@ -10,7 +10,7 @@ const Entrega = require("../models/Entrega");
 const RotaEntregador = require("../models/RotaEntregador");
 const logger = require("../logs/utils/logger");
 
-// --- helpers: faixa de "hoje" (00:00:00 -> 23:59:59 local)
+// --- helpers: faixa de "hoje" (00:00 -> 24:00 local)
 function hojeRange() {
   const ini = new Date();
   ini.setHours(0, 0, 0, 0);
@@ -19,32 +19,26 @@ function hojeRange() {
   return { ini, fim };
 }
 
-// todas as rotas daqui para baixo exigem usuário autenticado
 router.use(autenticar);
 
 /**
  * GET /rota-entregador
- * Lista as entregas do ENTREGADOR logado, SOMENTE do dia atual e da padaria dele.
- * (Gerentes não acessam aqui; se precisarem assumir rota, admin cria um usuário entregador backup.)
+ * Lista as entregas do ENTREGADOR logado, SOMENTE de hoje (createdAt) e da padaria dele,
+ * com cliente populado incluindo location.
  */
 router.get("/", autorizar("entregador"), async (req, res) => {
   try {
     const entregadorId = req.usuario.id;
-    const padariaId = req.usuario.padaria; // segurança: restringe à padaria do usuário
+    const padariaId = req.usuario.padaria;
     const { ini, fim } = hojeRange();
 
     const entregas = await Entrega.find({
       padaria: padariaId,
       entregador: new mongoose.Types.ObjectId(entregadorId),
       entregue: { $in: [false, null] },
-      $or: [
-        { createdAt: { $gte: ini, $lt: fim } },
-        { dataEntrega: { $gte: ini, $lt: fim } },
-        { data: { $gte: ini, $lt: fim } },
-        { horaPrevista: { $gte: ini, $lt: fim } },
-      ],
+      createdAt: { $gte: ini, $lt: fim },
     })
-      .populate("cliente", "nome rota")
+      .populate("cliente", "nome rota endereco location observacoes")
       .lean();
 
     logger.info(`📦 Entregas pendentes de hoje: ${entregas.length}`);
@@ -57,8 +51,7 @@ router.get("/", autorizar("entregador"), async (req, res) => {
 
 /**
  * PATCH /rota-entregador/concluir
- * Finaliza a rota do dia do entregador (se houver entregas concluídas).
- * Atualiza métricas na collection RotaEntregador.
+ * (inalterado, apenas mantido aqui)
  */
 router.patch("/concluir", autorizar("entregador"), async (req, res) => {
   try {
@@ -69,7 +62,6 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
     const amanha = new Date(hoje);
     amanha.setDate(hoje.getDate() + 1);
 
-    // obtém/valida o registro de rota do dia
     const rota = await RotaEntregador.findOne({
       entregadorId: new mongoose.Types.ObjectId(entregadorId),
       data: { $gte: hoje, $lt: amanha },
@@ -79,7 +71,6 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
       return res.status(404).json({ erro: "Rota do dia não encontrada." });
     }
 
-    // entregas do dia deste entregador (opcional: também filtrar pela padaria)
     const entregas = await Entrega.find({
       entregador: new mongoose.Types.ObjectId(entregadorId),
       createdAt: { $gte: hoje, $lt: amanha },
@@ -99,8 +90,6 @@ router.patch("/concluir", autorizar("entregador"), async (req, res) => {
     }
 
     const fimRota = new Date();
-
-    // base para cálculo de duração (usa o que existir; fallback para hoje 00:00)
     const inicioBase =
       rota.inicioRota || rota.claimedAt || rota.createdAt || hoje;
     const tempoTotalMinutos = Math.max(
