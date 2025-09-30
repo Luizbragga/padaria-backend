@@ -4,33 +4,31 @@ require("dotenv").config();
 const express = require("express");
 const app = express();
 
+const cookieParser = require("cookie-parser");
 const logger = require("./logs/utils/logger");
 const helmet = require("helmet");
+const hpp = require("hpp");
 const morgan = require("morgan");
-const cors = require("cors"); // ✅ apenas UMA importação
+const cors = require("cors");
 const cron = require("node-cron");
 const rateLimit = require("express-rate-limit");
 
-// se usar ngrok/proxy, ajuda:
-app.set("trust proxy", 1);
-
-// ===== Banco =====
+/* ===== Banco ===== */
 const conectarBanco = require("./config/database");
 conectarBanco();
 
-/* ===================== CORS ===================== */
-
-// permite localhost e QUALQUER subdomínio do ngrok-free.app
-function isAllowedOrigin(origin = "") {
-  if (!origin) return true; // curl / apps nativas
-  if (origin === "http://localhost:5173") return true;
-  if (origin === "http://127.0.0.1:5173") return true;
-  return /^https:\/\/[a-z0-9-]+\.ngrok-free\.app$/i.test(origin);
-}
+/* =========== CORS: montar allowlist via .env =========== */
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",")
+  : [];
 
 const corsOptions = {
   origin(origin, cb) {
-    cb(null, isAllowedOrigin(origin)); // true/false
+    if (!origin || allowedOrigins.includes(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Origin não permitida por CORS"));
+    }
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: [
@@ -38,17 +36,17 @@ const corsOptions = {
     "Authorization",
     "ngrok-skip-browser-warning",
   ],
-  credentials: false,
+  credentials: true,
   optionsSuccessStatus: 204,
 };
+/* ======================================================= */
 
+/* =============== Middlewares (ordem importa) ============ */
+app.use(cookieParser());
+app.use(express.json());
+app.use(hpp());
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
-
-/* ================================================= */
-
-/* ================== Middlewares ================== */
-app.use(express.json());
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(morgan("dev"));
 
@@ -60,7 +58,6 @@ const limiter = rateLimit({
   },
 });
 app.use(limiter);
-/* ================================================= */
 
 /* ======================= CRON ==================== */
 let gerarEntregasDoDia = null;
@@ -100,22 +97,17 @@ app.use((req, res, next) => {
   res.header("Vary", "Origin");
 
   if (req.method === "OPTIONS") {
-    // libera todos os métodos usuais
     res.header(
       "Access-Control-Allow-Methods",
       "GET,POST,PUT,PATCH,DELETE,OPTIONS"
     );
-
-    // MUITO IMPORTANTE: ecoa exatamente os headers solicitados no preflight
     const reqHeaders = req.headers["access-control-request-headers"];
     res.header(
       "Access-Control-Allow-Headers",
       reqHeaders || "Authorization, Content-Type, ngrok-skip-browser-warning"
     );
-
-    // se você não usa cookies, mantenha credentials false
-    // res.header("Access-Control-Allow-Credentials", "false");
-
+    // como usamos cookie httpOnly, habilite credenciais no preflight
+    res.header("Access-Control-Allow-Credentials", "true");
     return res.sendStatus(204);
   }
 
