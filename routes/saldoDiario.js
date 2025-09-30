@@ -13,4 +13,7 @@ router.get("/saldo", autorizar("admin", "gerente"), ctrl.getSaldo);
 router.post("/lote", autorizar("admin", "gerente"), ctrl.criarLote);
 router.post("/vender", autorizar("admin", "gerente"), ctrl.registrarVenda);
 
+// novos para corrigir/estornar vendas:
+router.patch("/venda/:id", autorizar("admin", "gerente"), ctrl.atualizarVenda);
+router.delete("/venda/:id", autorizar("admin", "gerente"), ctrl.excluirVenda);
 module.exports = router;
