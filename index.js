@@ -58,6 +58,31 @@ const limiter = rateLimit({
   },
 });
 app.use(limiter);
+// === Rate limiting específico ===
+// Limita cada IP a 5 tentativas de login a cada 15 minutos
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 5,
+  message: {
+    erro: "Muitas tentativas de login. Tente novamente mais tarde.",
+  },
+});
+
+// Limita requisições de refresh token (aplicado às rotas de refresh) a 100 por IP em 15 minutos
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: {
+    erro: "Muitas requisições de token. Tente novamente mais tarde.",
+  },
+});
+
+// Aplica o limiter de login à rota de login (inclui POST /api/login)
+app.use("/api/login", loginLimiter);
+
+// Aplica o limiter de refresh às rotas de renovação de token
+app.use("/api/login/token/refresh", refreshLimiter);
+app.use("/api/token/refresh", refreshLimiter);
 
 /* ======================= CRON ==================== */
 let gerarEntregasDoDia = null;
@@ -138,6 +163,10 @@ app.use("/api/pagamentos", require("./routes/pagamentos"));
 app.use("/api/caixa", require("./routes/caixa"));
 app.use("/api/saldo-diario", require("./routes/saldoDiario"));
 app.use("/api/teste-protegido", require("./routes/testeProtegido"));
+
+// Middleware de erro (deve estar antes do 404)
+const errorHandler = require("./middlewares/errorHandler");
+app.use(errorHandler);
 
 /* ======================= 404 ===================== */
 app.use((_req, res) => {
