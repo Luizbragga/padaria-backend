@@ -987,6 +987,7 @@ exports.obterLocalizacaoEntregadores = async (req, res) => {
 };
 
 // /analitico/entregas-tempo-real?padaria=...
+// /analitico/entregas-tempo-real?padaria=...
 exports.entregasTempoReal = async (req, res) => {
   try {
     const padariaId = getPadariaFromReq(req);
@@ -999,7 +1000,10 @@ exports.entregasTempoReal = async (req, res) => {
       createdAt: { $gte: ini, $lt: fim },
     })
       .populate({ path: "cliente", select: "nome rota location" })
-      .select("cliente entregue pago produtos")
+      .populate({ path: "entregador", select: "nome" })
+      .select(
+        "cliente entregador entregue pago produtos createdAt entregueEm problemas"
+      )
       .lean();
 
     res.json(entregasDeHoje);
