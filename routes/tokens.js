@@ -49,7 +49,7 @@ function buildAccessPayload(usuario) {
  * Retorna: { token, refreshToken }   // faz rotação do refresh token
  */
 router.post("/refresh", async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.body?.refreshToken || req.cookies?.refreshToken;
   if (!refreshToken) {
     return res.status(401).json({ erro: "Refresh token ausente." });
   }
@@ -118,8 +118,7 @@ router.post("/refresh", async (req, res) => {
  * Se quiser “logout global”, deleteMany por usuario.
  */
 router.post("/logout", async (req, res) => {
-  const { refreshToken } = req.body;
-
+  const refreshToken = req.body?.refreshToken || req.cookies?.refreshToken;
   if (!refreshToken) {
     return res.status(400).json({ erro: "Refresh token obrigatório." });
   }
@@ -131,6 +130,8 @@ router.post("/logout", async (req, res) => {
       return res.status(404).json({ erro: "Refresh token não encontrado." });
     }
     await registro.revogar("logout");
+    // remove o cookie de refresh do cliente
+    res.clearCookie("refreshToken");
     return res.json({ mensagem: "Logout realizado com sucesso." });
   } catch (err) {
     console.error("Erro no logout:", err);
