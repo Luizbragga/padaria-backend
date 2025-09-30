@@ -5,6 +5,7 @@ const crypto = require("crypto");
 
 const RefreshToken = require("../models/RefreshToken");
 const Usuario = require("../models/Usuario");
+const hashToken = require("../utils/hashToken");
 
 // --- Config ---
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -17,9 +18,13 @@ const REFRESH_TTL_DAYS = Number(process.env.REFRESH_TTL_DAYS || 7);
 function buildRefreshTokenDoc(usuarioId) {
   const now = Date.now();
   const ttlMs = REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000;
+  // gera token aleatório e seu hash; devolve ambos
+  const plainToken = crypto.randomBytes(64).toString("hex");
+  const tokenHash = hashToken(plainToken);
   return {
     usuario: usuarioId,
-    token: crypto.randomBytes(64).toString("hex"),
+    tokenHash,
+    plainToken,
     criadoEm: new Date(now),
     expiraEm: new Date(now + ttlMs),
   };
@@ -51,7 +56,8 @@ router.post("/refresh", async (req, res) => {
 
   try {
     // 1) confere se existe
-    const tokenDoc = await RefreshToken.findOne({ token: refreshToken });
+    const tokenHash = hashToken(refreshToken);
+    const tokenDoc = await RefreshToken.findOne({ tokenHash });
     if (!tokenDoc) {
       return res.status(403).json({ erro: "Refresh token inválido." });
     }
@@ -82,12 +88,18 @@ router.post("/refresh", async (req, res) => {
 
     // 5) rotação do refresh: invalida o antigo e cria um novo
     await RefreshToken.deleteOne({ _id: tokenDoc._id });
+    // gera novo token, grava somente o hash e retorna o original
     const novoRefreshDoc = buildRefreshTokenDoc(usuario._id);
-    await RefreshToken.create(novoRefreshDoc);
+    await RefreshToken.create({
+      usuario: novoRefreshDoc.usuario,
+      tokenHash: novoRefreshDoc.tokenHash,
+      criadoEm: novoRefreshDoc.criadoEm,
+      expiraEm: novoRefreshDoc.expiraEm,
+    });
 
     return res.json({
       token: novoAccessToken,
-      refreshToken: novoRefreshDoc.token,
+      refreshToken: novoRefreshDoc.plainToken,
     });
   } catch (err) {
     console.error("Erro ao renovar token:", err);
@@ -109,7 +121,8 @@ router.post("/logout", async (req, res) => {
   }
 
   try {
-    const resultado = await RefreshToken.deleteOne({ token: refreshToken });
+    const tokenHash = hashToken(refreshToken);
+    const resultado = await RefreshToken.deleteOne({ tokenHash });
 
     if (resultado.deletedCount === 0) {
       return res.status(404).json({ erro: "Refresh token não encontrado." });

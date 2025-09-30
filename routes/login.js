@@ -8,6 +8,7 @@ const crypto = require("crypto");
 
 const Usuario = require("../models/Usuario");
 const RefreshToken = require("../models/RefreshToken");
+const hashToken = require("../utils/hashToken");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -34,13 +35,16 @@ function gerarAccessToken(usuario) {
 }
 
 async function criarRefreshToken(usuarioId) {
+  // gera token aleatório e computa seu hash
   const token = crypto.randomBytes(64).toString("hex");
+  const tokenHash = hashToken(token);
   await RefreshToken.create({
     usuario: usuarioId,
-    token,
+    tokenHash,
     criadoEm: new Date(),
     expiraEm: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 dias
   });
+  // retorna o token original para o cliente
   return token;
 }
 
@@ -101,9 +105,11 @@ router.post("/token/refresh", async (req, res) => {
       return res.status(400).json({ erro: "refreshToken é obrigatório" });
     }
 
+    const tokenHash = hashToken(refreshToken);
     const registro = await RefreshToken.findOne({
-      token: refreshToken,
+      tokenHash,
     }).populate("usuario");
+
     if (!registro) {
       return res.status(401).json({ erro: "Refresh token inválido" });
     }
@@ -140,7 +146,8 @@ router.post("/logout", async (req, res) => {
     const { refreshToken } = req.body || {};
     if (!refreshToken) return res.json({ ok: true });
 
-    await RefreshToken.deleteOne({ token: refreshToken });
+    const tokenHash = hashToken(refreshToken);
+    await RefreshToken.deleteOne({ tokenHash });
     return res.json({ ok: true });
   } catch (err) {
     console.error("Erro no logout:", err);

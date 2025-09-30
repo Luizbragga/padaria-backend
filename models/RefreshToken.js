@@ -9,12 +9,12 @@ const RefreshTokenSchema = new mongoose.Schema(
       required: true,
       index: true, // ajuda nas buscas por usuário
     },
-    token: {
+    tokenHash: {
       type: String,
       required: true,
-      // manter plaintext como está no seu fluxo atual
-      // (se quiser evoluir depois para hash, a gente adapta)
+      // armazena o hash SHA-256 do refresh token
     },
+
     criadoEm: {
       type: Date,
       default: Date.now,
@@ -35,8 +35,8 @@ const RefreshTokenSchema = new mongoose.Schema(
 );
 
 /* ------------------ ÍNDICES ------------------ */
-// garante unicidade do token
-RefreshTokenSchema.index({ token: 1 }, { unique: true });
+// garante unicidade do hash do token
+RefreshTokenSchema.index({ tokenHash: 1 }, { unique: true });
 
 // consultas por (usuario, expiraEm) ficam rápidas
 RefreshTokenSchema.index({ usuario: 1, expiraEm: 1 });
