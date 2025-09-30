@@ -113,6 +113,10 @@ router.post("/token/refresh", async (req, res) => {
     if (!registro) {
       return res.status(401).json({ erro: "Refresh token inválido" });
     }
+    // impede uso de tokens revogados
+    if (registro.revogadoEm) {
+      return res.status(401).json({ erro: "Refresh token revogado" });
+    }
 
     if (registro.expiraEm && registro.expiraEm.getTime() < Date.now()) {
       // expirada: apaga e bloqueia
@@ -147,7 +151,10 @@ router.post("/logout", async (req, res) => {
     if (!refreshToken) return res.json({ ok: true });
 
     const tokenHash = hashToken(refreshToken);
-    await RefreshToken.deleteOne({ tokenHash });
+    const registro = await RefreshToken.findOne({ tokenHash });
+    if (registro) {
+      await registro.revogar("logout");
+    }
     return res.json({ ok: true });
   } catch (err) {
     console.error("Erro no logout:", err);
