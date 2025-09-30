@@ -67,7 +67,7 @@ async function getOrCreate(padaria, data) {
 }
 
 /** GET /saldo-diario/saldo?data=YYYY-MM-DD[&padaria=] */
-exports.getSaldo = async (req, res) => {
+async function getSaldo(req, res) {
   try {
     const padaria = resolverPadaria(req);
     const data = req.query?.data;
@@ -98,10 +98,10 @@ exports.getSaldo = async (req, res) => {
       .status(e.status || 500)
       .json({ erro: e.message || "Erro ao buscar saldo." });
   }
-};
+}
 
 /** POST /saldo-diario/lote  body: { data, tipo, produto, quantidade, custoTotal, precoSugerido } */
-exports.criarLote = async (req, res) => {
+async function criarLote(req, res) {
   try {
     const padaria = resolverPadaria(req);
     const {
@@ -140,10 +140,10 @@ exports.criarLote = async (req, res) => {
       .status(e.status || 500)
       .json({ erro: e.message || "Erro ao criar lote." });
   }
-};
+}
 
 /** POST /saldo-diario/vender  body: { data, batchId, precoVenda, quantidade=1 } */
-exports.registrarVenda = async (req, res) => {
+async function registrarVenda(req, res) {
   try {
     const padaria = resolverPadaria(req);
     const { data, batchId, precoVenda, quantidade = 1 } = req.body || {};
@@ -164,7 +164,6 @@ exports.registrarVenda = async (req, res) => {
     const custoUnit =
       (Number(b.custoTotal) || 0) / Math.max(1, Number(b.quantidade) || 1);
 
-    // permite preço por unidade diferente ao vender
     const pVenda = Number(
       precoVenda != null ? precoVenda : b.precoSugerido || 0
     );
@@ -195,4 +194,72 @@ exports.registrarVenda = async (req, res) => {
       .status(e.status || 500)
       .json({ erro: e.message || "Erro ao registrar venda." });
   }
+}
+
+async function atualizarVenda(req, res) {
+  try {
+    const padaria = resolverPadaria(req);
+    const { id } = req.params;
+    const { data, precoVenda, custoUnitario } = req.body || {};
+
+    const doc = await getOrCreate(padaria, data);
+    const v = doc.vendas.id(id);
+    if (!v) return res.status(404).json({ erro: "Venda não encontrada." });
+
+    if (precoVenda != null) {
+      const pv = Number(precoVenda);
+      if (!Number.isFinite(pv) || pv < 0)
+        return res.status(400).json({ erro: "precoVenda inválido." });
+      v.precoVenda = pv;
+    }
+    if (custoUnitario != null) {
+      const cu = Number(custoUnitario);
+      if (!Number.isFinite(cu) || cu < 0)
+        return res.status(400).json({ erro: "custoUnitario inválido." });
+      v.custoUnitario = cu;
+    }
+
+    await doc.save();
+    return res.json({ ok: true, venda: v, saldo: resumo(doc) });
+  } catch (e) {
+    console.error("atualizarVenda:", e);
+    res
+      .status(e.status || 500)
+      .json({ erro: e.message || "Erro ao atualizar venda." });
+  }
+}
+
+async function excluirVenda(req, res) {
+  try {
+    const padaria = resolverPadaria(req);
+    const { id } = req.params;
+    const { data } = req.query; // ou body
+
+    const doc = await getOrCreate(padaria, data);
+    const v = doc.vendas.id(id);
+    if (!v) return res.status(404).json({ erro: "Venda não encontrada." });
+
+    if (v.batchId) {
+      const b = doc.batches.id(v.batchId);
+      if (b) b.vendidos = Math.max(0, Number(b.vendidos || 0) - 1);
+    }
+
+    v.deleteOne();
+    await doc.save();
+
+    return res.json({ ok: true, saldo: resumo(doc) });
+  } catch (e) {
+    console.error("excluirVenda:", e);
+    res
+      .status(e.status || 500)
+      .json({ erro: e.message || "Erro ao excluir venda." });
+  }
+}
+
+module.exports = {
+  getSaldo,
+  criarLote,
+  registrarVenda,
+  atualizarVenda,
+  excluirVenda,
 };
