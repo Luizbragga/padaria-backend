@@ -9,6 +9,7 @@ const crypto = require("crypto");
 const Usuario = require("../models/Usuario");
 const RefreshToken = require("../models/RefreshToken");
 const hashToken = require("../utils/hashToken");
+const validate = require("../middlewares/validate");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -51,12 +52,8 @@ async function criarRefreshToken(usuarioId) {
 /**
  * POST /login
  */
-router.post("/", async (req, res) => {
+router.post("/", validate(loginSchema), async (req, res) => {
   try {
-    // validação
-    const { error } = loginSchema.validate(req.body);
-    if (error) return res.status(400).json({ erro: error.details[0].message });
-
     // usuário
     const usuario = await Usuario.findOne({ nome: req.body.nome });
     if (!usuario)
