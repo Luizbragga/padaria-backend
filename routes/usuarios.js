@@ -66,7 +66,12 @@ router.patch(
 
 router.patch("/:id/senha", usuariosController.alterarSenha);
 
-router.delete("/:id", usuariosController.excluirUsuario);
+router.delete(
+  "/:id",
+  autorizar("admin"),
+  validate(objectIdParamSchema, "params"),
+  usuariosController.excluirUsuario
+);
 
 router.patch("/:id/localizacao", usuariosController.atualizarLocalizacao);
 
