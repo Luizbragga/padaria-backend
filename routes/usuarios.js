@@ -7,12 +7,26 @@ const usuariosController = require("../controllers/usuariosController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 
-const usuarioSchema = Joi.object({
-  nome: Joi.string().required(),
-  senha: Joi.string().required(),
-  role: Joi.string().valid("admin", "gerente", "entregador").required(),
-  padaria: Joi.string().optional(), // somente exigida conforme a lógica do controller
+// validação do parâmetro :id (ObjectId do MongoDB)
+const objectIdParamSchema = Joi.object({
+  id: Joi.string().hex().length(24).required(),
 });
+
+// validação do corpo para criação (campos obrigatórios)
+const usuarioSchema = Joi.object({
+  nome: Joi.string().min(1).max(120).required(),
+  senha: Joi.string().min(6).max(128).required(),
+  role: Joi.string().valid("admin", "gerente", "entregador").required(),
+  padaria: Joi.string().optional(), // controller decide obrigatoriedade por regra de negócio
+});
+
+// validação do corpo para atualização (campos opcionais, mas ao menos 1 campo)
+const usuarioUpdateSchema = Joi.object({
+  nome: Joi.string().min(1).max(120),
+  senha: Joi.string().min(6).max(128),
+  role: Joi.string().valid("admin", "gerente", "entregador"),
+  padaria: Joi.string(), // manter string (controller lida com regra de negócio)
+}).min(1); // exige ao menos um campo no body
 
 // Todas exigem autenticação
 router.use(autenticar);
@@ -42,7 +56,13 @@ router.get("/me", usuariosController.me);
 
 router.get("/:id", usuariosController.obterUsuario);
 
-router.patch("/:id", usuariosController.atualizarUsuario);
+router.patch(
+  "/:id",
+  autorizar("admin"),
+  validate(objectIdParamSchema, "params"),
+  validate(usuarioUpdateSchema),
+  usuariosController.atualizarUsuario
+);
 
 router.patch("/:id/senha", usuariosController.alterarSenha);
 
