@@ -1,5 +1,7 @@
 //index.js
-require("dotenv").config();
+require("dotenv-safe").config({
+  example: ".env.example",
+});
 
 const express = require("express");
 const app = express();
