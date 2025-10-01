@@ -5,6 +5,9 @@ require("dotenv-safe").config({
 
 const express = require("express");
 const app = express();
+// sanitização global contra operadores perigosos do Mongo ($, .)
+const sanitizeRequest = require("./middlewares/sanitizeRequest");
+app.use(sanitizeRequest);
 
 const cookieParser = require("cookie-parser");
 const logger = require("./logs/utils/logger");
