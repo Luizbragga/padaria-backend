@@ -14,15 +14,27 @@ const autorizar = require("../middlewares/autorizar");
 const produtoCreateSchema = Joi.object({
   nome: Joi.string().min(1).max(200).required(),
   preco: Joi.number().positive().required(),
-  padaria: Joi.string().hex().length(24).required(), // controller já espera ObjectId válido
+  padaria: Joi.string().hex().length(24).required(),
 }).required();
 
 // Query do GET /produtos
-// admin: exige ?padaria=<id> ; gerente: controller usa padaria do usuário, então query é opcional
 const produtosListQuerySchema = Joi.object({
   padaria: Joi.string().hex().length(24).optional(),
   incluirInativos: Joi.number().valid(0, 1).optional(),
 }).unknown(false);
+
+// params :id (ObjectId do MongoDB)
+const produtoIdParamSchema = Joi.object({
+  id: Joi.string().hex().length(24).required(),
+});
+
+// body para atualização parcial (ao menos 1 campo)
+const produtoUpdateSchema = Joi.object({
+  nome: Joi.string().min(1).max(200),
+  preco: Joi.number().positive(),
+  padaria: Joi.string().hex().length(24),
+  ativo: Joi.boolean(),
+}).min(1);
 
 // === Rotas ===
 
@@ -31,7 +43,7 @@ router.post(
   "/",
   autenticar,
   autorizar("admin"),
-  validate(produtoCreateSchema), // valida e sanitiza body
+  validate(produtoCreateSchema),
   controller.criarProduto
 );
 
@@ -40,8 +52,27 @@ router.get(
   "/",
   autenticar,
   autorizar("admin", "gerente"),
-  validate(produtosListQuerySchema, "query"), // valida e sanitiza query
+  validate(produtosListQuerySchema, "query"),
   controller.listarProdutos
+);
+
+// Atualizar produto (apenas admin)
+router.patch(
+  "/:id",
+  autenticar,
+  autorizar("admin"),
+  validate(produtoIdParamSchema, "params"),
+  validate(produtoUpdateSchema),
+  controller.atualizarProduto
+);
+
+// Remover produto (apenas admin)
+router.delete(
+  "/:id",
+  autenticar,
+  autorizar("admin"),
+  validate(produtoIdParamSchema, "params"),
+  controller.excluirProduto
 );
 
 module.exports = router;
