@@ -1,10 +1,18 @@
 // routes/usuarios.js
 const express = require("express");
 const router = express.Router();
-
+const Joi = require("joi");
+const validate = require("../middlewares/validate");
 const usuariosController = require("../controllers/usuariosController");
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
+
+const usuarioSchema = Joi.object({
+  nome: Joi.string().required(),
+  senha: Joi.string().required(),
+  role: Joi.string().valid("admin", "gerente", "entregador").required(),
+  padaria: Joi.string().optional(), // somente exigida conforme a lógica do controller
+});
 
 // Todas exigem autenticação
 router.use(autenticar);
@@ -13,7 +21,12 @@ router.use(autenticar);
  * Criar usuário
  * - Somente ADMIN (o controller também valida papéis)
  */
-router.post("/", autorizar("admin"), usuariosController.criarUsuario);
+router.post(
+  "/",
+  autorizar("admin"),
+  validate(usuarioSchema),
+  usuariosController.criarUsuario
+);
 
 /**
  * Listar usuários
