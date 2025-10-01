@@ -17,6 +17,7 @@ const morgan = require("morgan");
 const cors = require("cors");
 const cron = require("node-cron");
 const rateLimit = require("express-rate-limit");
+const blockMongoOperators = require("./middlewares/blockMongoOperators");
 
 /* ===== Banco ===== */
 const conectarBanco = require("./config/database");
@@ -54,6 +55,7 @@ app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(morgan("dev"));
+app.use(blockMongoOperators());
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -63,22 +65,26 @@ const limiter = rateLimit({
   },
 });
 app.use(limiter);
-// === Rate limiting específico ===
+
 // Limita cada IP a 5 tentativas de login a cada 15 minutos
+// === Rate limit refinado por rota sensível ===
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 5,
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 20, // até 20 tentativas/15min por IP
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    erro: "Muitas tentativas de login. Tente novamente mais tarde.",
+    erro: "Muitas tentativas de login. Tente novamente em alguns minutos.",
   },
 });
 
-// Limita requisições de refresh token (aplicado às rotas de refresh) a 100 por IP em 15 minutos
 const refreshLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 5 * 60 * 1000, // 5 min
+  max: 60, // refresh deve ser mais permissivo que login, mas ainda controlado
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    erro: "Muitas requisições de token. Tente novamente mais tarde.",
+    erro: "Excesso de solicitações de refresh. Aguarde alguns instantes.",
   },
 });
 
@@ -144,8 +150,9 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use("/api/login", require("./routes/login"));
-app.use("/api/token", require("./routes/tokens"));
+// aplicado rate limit **somente** nas rotas sensíveis
+app.use("/api/login", loginLimiter, require("./routes/login"));
+app.use("/api/token", refreshLimiter, require("./routes/tokens"));
 app.use("/api/rotas-split", require("./routes/rotasSplitHoje"));
 app.use("/api/usuarios", require("./routes/usuarios"));
 app.use("/api/padarias", require("./routes/padarias"));
