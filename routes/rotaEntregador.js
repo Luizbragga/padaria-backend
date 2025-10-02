@@ -10,6 +10,11 @@ const Entrega = require("../models/Entrega");
 const RotaEntregador = require("../models/RotaEntregador");
 const logger = require("../logs/utils/logger");
 
+const {
+  rotaEntregadorGetQuerySchema,
+  rotaEntregadorConcluirBodySchema,
+} = require("../validations/rotaEntregador");
+
 // --- helpers: faixa de "hoje" (00:00 -> 24:00 local)
 function hojeRange() {
   const ini = new Date();
@@ -28,8 +33,22 @@ router.use(autenticar);
  */
 router.get("/", autorizar("entregador"), async (req, res) => {
   try {
+    // bloqueia query params desconhecidos (contrato não usa query)
+    const { error: qErr } = rotaEntregadorGetQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
     const entregadorId = req.usuario.id;
     const padariaId = req.usuario.padaria;
+
+    // assegura ObjectId válido para evitar throw
+    if (!mongoose.Types.ObjectId.isValid(entregadorId)) {
+      return res
+        .status(400)
+        .json({ erro: "Identificador de entregador inválido" });
+    }
+
     const { ini, fim } = hojeRange();
 
     const entregas = await Entrega.find({
@@ -55,7 +74,19 @@ router.get("/", autorizar("entregador"), async (req, res) => {
  */
 router.patch("/concluir", autorizar("entregador"), async (req, res) => {
   try {
+    // rota não usa body → bloqueia extras
+    const { error: bErr } = rotaEntregadorConcluirBodySchema.validate(
+      req.body || {}
+    );
+    if (bErr) return res.status(400).json({ erro: bErr.details[0].message });
+
     const entregadorId = req.usuario.id;
+
+    if (!mongoose.Types.ObjectId.isValid(entregadorId)) {
+      return res
+        .status(400)
+        .json({ erro: "Identificador de entregador inválido" });
+    }
 
     const hoje = new Date();
     hoje.setHours(0, 0, 0, 0);
