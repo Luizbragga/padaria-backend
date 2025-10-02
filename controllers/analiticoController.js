@@ -13,6 +13,8 @@ const {
   inadimplenciaQuerySchema,
   pagamentosDetalhadosQuerySchema,
   aReceberMensalQuerySchema,
+  pendenciasDoMesQuerySchema,
+  pendenciasAnuaisQuerySchema,
 } = require("../validations/analitico");
 
 // helpers
@@ -1363,12 +1365,19 @@ exports.notificacoesRecentes = async (req, res) => {
 // e a quantidade de clientes em atraso. Ignora meses anteriores ao primeiro movimento.
 exports.pendenciasAnuais = async (req, res) => {
   try {
-    const padariaId = getPadariaFromReq(req) || req.usuario?.padaria;
+    // valida query e bloqueia extras
+    const { error: qErr, value: qVal } = pendenciasAnuaisQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    const padariaId =
+      qVal.padaria || getPadariaFromReq(req) || req.usuario?.padaria;
     if (!padariaId)
       return res.status(400).json({ erro: "Padaria não informada." });
 
-    const ano = Number(req.query.ano) || new Date().getFullYear();
-    const gracaDia = Math.min(31, Math.max(1, Number(req.query.gracaDia) || 8));
+    const ano = Number(qVal.ano) || new Date().getFullYear();
+    const gracaDia = Math.min(31, Math.max(1, Number(qVal.gracaDia) || 8));
     const padaria = toObjectIdIfValid(padariaId);
 
     // Descobre o 1º mês com movimento (entrega criada, pagamento ou avulsa)
@@ -1534,14 +1543,21 @@ exports.pendenciasAnuais = async (req, res) => {
 // Lista clientes pendentes no mês selecionado + flag 'liberado' conforme regra do dia 8.
 exports.pendenciasDoMes = async (req, res) => {
   try {
-    const padariaId = getPadariaFromReq(req) || req.usuario?.padaria;
+    // valida query e bloqueia extras
+    const { error: qErr, value: qVal } = pendenciasDoMesQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    const padariaId =
+      qVal.padaria || getPadariaFromReq(req) || req.usuario?.padaria;
     if (!padariaId)
       return res.status(400).json({ erro: "Padaria não informada." });
 
-    const { ini, fim, mesStr } = mesRange(req.query.mes);
+    const { ini, fim, mesStr } = mesRange(qVal.mes);
     const ano = ini.getFullYear();
     const mesIndex = ini.getMonth(); // 0..11
-    const gracaDia = Math.min(31, Math.max(1, Number(req.query.gracaDia) || 8));
+    const gracaDia = Math.min(31, Math.max(1, Number(qVal.gracaDia) || 8));
     const padaria = toObjectIdIfValid(padariaId);
 
     // Descobre 1º mês com movimento para não mostrar dados antes do histórico real
