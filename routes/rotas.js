@@ -9,11 +9,16 @@ const RotaOverride = require("../models/RotaOverride");
 const Entrega = require("../models/Entrega");
 const Cliente = require("../models/Cliente");
 const RotaDia = require("../models/RotaDia");
-const Usuario = require("../models/Usuario"); // << necessário para rotaAtual
+const Usuario = require("../models/Usuario");
 
-/* =========================
-   Utilidades de data (hoje)
-   ========================= */
+const {
+  nomesQuerySchema,
+  claimBodySchema,
+  forceReleaseBodySchema,
+} = require("../validations/rotas");
+
+// ========================= Utilidades de data (hoje) =========================
+
 function dataHojeLocal() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -74,9 +79,17 @@ router.get(
   async (req, res) => {
     try {
       // padaria do usuário (gerente/atendente) ou vinda da query (admin)
+      const role = req.usuario?.role;
+
+      // valida query (bloqueia campos desconhecidos e checa id quando presente)
+      const { error: qErr, value: qVal } = nomesQuerySchema.validate(
+        req.query || {}
+      );
+      if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
       const padariaId =
-        req.usuario?.role === "admin"
-          ? req.query.padaria || req.usuario?.padaria
+        role === "admin"
+          ? qVal.padaria || req.usuario?.padaria
           : req.usuario?.padaria;
 
       if (!padariaId) {
@@ -86,7 +99,6 @@ router.get(
       const padaria = mongoose.Types.ObjectId.isValid(padariaId)
         ? new mongoose.Types.ObjectId(padariaId)
         : padariaId;
-
       // distinct nos clientes
       const rotas = (await Cliente.distinct("rota", { padaria }))
         .filter(Boolean)
@@ -102,9 +114,23 @@ router.get(
 );
 router.get("/disponiveis", autorizar("entregador"), async (req, res) => {
   try {
-    const padariaId = req.usuario?.padaria;
-    if (!padariaId)
-      return res.status(400).json({ erro: "Usuário sem padaria" });
+    // padaria do usuário (gerente/atendente) ou vinda da query (admin)
+    const role = req.usuario?.role;
+
+    // valida query (bloqueia campos desconhecidos e checa id quando presente)
+    const { error: qErr, value: qVal } = nomesQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    const padariaId =
+      role === "admin"
+        ? qVal.padaria || req.usuario?.padaria
+        : req.usuario?.padaria;
+
+    if (!padariaId) {
+      return res.status(400).json({ erro: "Padaria não informada" });
+    }
 
     const padaria = mongoose.Types.ObjectId.isValid(padariaId)
       ? new mongoose.Types.ObjectId(padariaId)
@@ -195,8 +221,8 @@ router.get("/disponiveis", autorizar("entregador"), async (req, res) => {
 });
 
 /* =====================================
-   POST /rotas/claim  { rota }   (somente entregador)
-   Trava a rota (lock) e atribui entregas
+ POST /rotas/claim  { rota }   (somente entregador)
+  Trava a rota (lock) e atribui entregas
    do dia **sem entregador** (ou já minhas).
    Se stale, também pega as do antigo dono.
    ===================================== */
@@ -204,9 +230,18 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
   try {
     const usuarioId = req.usuario?.id;
     const padariaId = req.usuario?.padaria;
-    const rota = String(req.body?.rota || "")
+
+    // valida body (rota obrigatória, sem campos extras)
+    const { error: bErr, value: bVal } = claimBodySchema.validate(
+      req.body || {}
+    );
+    if (bErr) return res.status(400).json({ erro: bErr.details[0].message });
+
+    // normaliza rota (UPPER + trim), mantendo contrato
+    const rota = String(bVal.rota || "")
       .toUpperCase()
       .trim();
+    if (!rota) return res.status(400).json({ erro: "Informe a rota" });
 
     if (!usuarioId || !padariaId || !rota) {
       return res
@@ -321,74 +356,53 @@ router.post("/claim", autorizar("entregador"), async (req, res) => {
    Libera lock do dia e DESATRIBUI
    as pendentes do entregador.
    ===================================== */
-router.post("/release", autorizar("entregador"), async (req, res) => {
-  try {
-    const usuarioId = req.usuario?.id;
-    const padariaId = req.usuario?.padaria;
-    if (!usuarioId || !padariaId) {
-      return res.status(400).json({ erro: "Dados insuficientes" });
-    }
-
-    const padaria = mongoose.Types.ObjectId.isValid(padariaId)
-      ? new mongoose.Types.ObjectId(padariaId)
-      : padariaId;
-
-    const data = dataHojeLocal();
-    const now = new Date();
-
-    const lock = await RotaDia.findOne({
-      padaria,
-      data,
-      entregador: usuarioId,
-    });
-    if (!lock) {
-      // mesmo sem lock, garanta que rotaAtual sai do usuário
-      await Usuario.findByIdAndUpdate(usuarioId, { $unset: { rotaAtual: 1 } });
-      return res.json({ ok: true, liberado: false });
-    }
-
-    // fecha período corrente no histórico
-    const last = lock.historico?.[lock.historico.length - 1];
-    if (last && !last.fim) last.fim = now;
-
-    const rota = lock.rota;
-    lock.entregador = null;
-    lock.lastSeenAt = null;
-    lock.status = "livre";
-    await lock.save();
-
-    // desatribui entregas pendentes desse entregador (do dia) nessa rota
-    const { ini, fim } = hojeRange();
-    const clientes = await Cliente.find({ padaria, rota }, { _id: 1 }).lean();
-    const clienteIds = clientes.map((c) => c._id);
-
-    if (clienteIds.length) {
-      await Entrega.updateMany(
-        {
-          padaria,
-          cliente: { $in: clienteIds },
-          entregue: { $in: [false, null] },
-          $or: [
-            { createdAt: { $gte: ini, $lt: fim } },
-            { dataEntrega: { $gte: ini, $lt: fim } },
-            { data: { $gte: ini, $lt: fim } },
-            { horaPrevista: { $gte: ini, $lt: fim } },
-          ],
-          entregador: usuarioId,
-        },
-        { $set: { entregador: null } }
+router.post(
+  "/force-release",
+  autenticar,
+  autorizar("admin", "gerente"),
+  async (req, res) => {
+    try {
+      // valida body (rota obrigatória, sem campos extras)
+      const { error: frErr, value: frVal } = forceReleaseBodySchema.validate(
+        req.body || {}
       );
+      if (frErr)
+        return res.status(400).json({ erro: frErr.details[0].message });
+
+      const rota = String(frVal.rota || "")
+        .toUpperCase()
+        .trim();
+      if (!rota) return res.status(400).json({ erro: "Informe a rota" });
+
+      const padariaId = req.usuario?.padaria;
+      if (!padariaId)
+        return res.status(400).json({ erro: "Usuário sem padaria" });
+
+      const padaria = mongoose.Types.ObjectId.isValid(padariaId)
+        ? new mongoose.Types.ObjectId(padariaId)
+        : padariaId;
+
+      const data = dataHojeLocal();
+
+      await RotaDia.updateOne(
+        { padaria, data, rota },
+        {
+          $set: {
+            entregador: null,
+            lastSeenAt: null,
+            status: "livre",
+          },
+        },
+        { upsert: true }
+      );
+
+      res.json({ ok: true, rota });
+    } catch (e) {
+      console.error("force-release error:", e);
+      res.status(500).json({ erro: "Falha ao liberar rota" });
     }
-
-    // >>> ao liberar, limpe a rotaAtual do usuário
-    await Usuario.findByIdAndUpdate(usuarioId, { $unset: { rotaAtual: 1 } });
-
-    res.json({ ok: true, liberado: true, rota });
-  } catch (err) {
-    console.error("erro /rotas/release:", err);
-    res.status(500).json({ erro: "Falha ao liberar rota" });
   }
-});
+);
 
 /* =====================================
    POST /rotas/ping   (somente entregador)
