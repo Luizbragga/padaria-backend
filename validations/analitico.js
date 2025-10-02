@@ -56,9 +56,35 @@ const pagamentosDetalhadosQuerySchema = Joi.object({
     .optional(),
 }).unknown(false);
 
+// ... partes de cima (Joi, objectId, ym, etc.) permanecem
+
+// GET /analitico/pendencias-do-mes?padaria=...&mes=YYYY-MM&gracaDia=8
+const pendenciasDoMesQuerySchema = Joi.object({
+  padaria: objectId.optional(),
+  mes: ym.optional(), // mantém contrato: opcional (default = mês atual dentro do handler)
+  gracaDia: Joi.number().integer().min(1).max(31).optional(), // default 8 dentro do handler
+}).unknown(false);
+
+// GET /analitico/pendencias-anuais?padaria=...&ano=2025&gracaDia=8
+const pendenciasAnuaisQuerySchema = Joi.object({
+  padaria: objectId.optional(),
+  ano: Joi.number().integer().min(2000).max(2100).optional(), // default = ano atual dentro do handler
+  gracaDia: Joi.number().integer().min(1).max(31).optional(), // default 8 dentro do handler
+}).unknown(false);
+
+// GET /analitico/a-receber?padaria=<id|opcional>&mes=YYYY-MM&ref=<ISO opcional>
+const aReceberMensalQuerySchema = Joi.object({
+  padaria: objectId.optional(),
+  mes: ym.optional(), // ex.: 2025-09
+  ref: Joi.date().iso().optional(), // data de referência (regra do dia 8)
+}).unknown(false);
+
 module.exports = {
   mediaProdutosQuerySchema,
   entregasPorDiaQuerySchema,
   inadimplenciaQuerySchema,
   pagamentosDetalhadosQuerySchema,
+  aReceberMensalQuerySchema,
+  pendenciasDoMesQuerySchema,
+  pendenciasAnuaisQuerySchema,
 };
