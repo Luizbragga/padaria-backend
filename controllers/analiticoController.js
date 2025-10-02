@@ -11,6 +11,7 @@ const {
   mediaProdutosQuerySchema,
   entregasPorDiaQuerySchema,
   inadimplenciaQuerySchema,
+  pagamentosDetalhadosQuerySchema,
 } = require("../validations/analitico");
 
 // helpers
@@ -1026,7 +1027,13 @@ exports.entregasTempoReal = async (req, res) => {
 // /analitico/pagamentos (com filtros)
 exports.pagamentosDetalhados = async (req, res) => {
   try {
-    const { dataInicial, dataFinal, dataEspecifica, forma } = req.query;
+    // valida query e bloqueia campos desconhecidos
+    const { error: qErr, value: qVal } =
+      pagamentosDetalhadosQuerySchema.validate(req.query || {});
+    if (qErr)
+      return res.status(400).json({ mensagem: qErr.details[0].message });
+
+    const { dataInicial, dataFinal, dataEspecifica, forma } = qVal;
 
     const padaria = toObjectIdIfValid(
       getPadariaFromReq(req) || req.usuario.padaria
