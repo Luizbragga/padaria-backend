@@ -49,7 +49,7 @@ const corsOptions = {
 
 /* =============== Middlewares (ordem importa) ============ */
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(hpp());
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
@@ -94,6 +94,14 @@ app.use("/api/login", loginLimiter);
 // Aplica o limiter de refresh às rotas de renovação de token
 app.use("/api/login/token/refresh", refreshLimiter);
 app.use("/api/token/refresh", refreshLimiter);
+
+// timeout de app: encerra reqs que demoram demais a nível de app
+app.use((req, res, next) => {
+  // req/res têm setTimeout nativo no Node
+  req.setTimeout(30_000); // 30s
+  res.setTimeout(35_000); // 35s (um pouco > ao do req)
+  next();
+});
 
 /* ======================= CRON ==================== */
 let gerarEntregasDoDia = null;
@@ -188,8 +196,18 @@ app.use((_req, res) => {
 
 /* ======================= Start =================== */
 const PORT = process.env.PORT || 4001;
-app.listen(PORT, () => {
+
+// injetar timeouts de segurança no servidor HTTP
+const server = app.listen(PORT, () => {
   logger.info(`Servidor rodando na porta ${PORT}`);
   logger.info("Servidor iniciado");
 });
+
+// Tempo máximo para processar uma requisição (após headers recebidos)
+server.requestTimeout = 30_000; // 30s
+// Tempo máximo aguardando headers da conexão
+server.headersTimeout = 65_000; // 65s (deve ser > requestTimeout)
+// Keep-alive para conexões reutilizáveis
+server.keepAliveTimeout = 60_000; // 60s
+
 /* ================================================= */
