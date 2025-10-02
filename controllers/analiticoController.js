@@ -12,6 +12,7 @@ const {
   entregasPorDiaQuerySchema,
   inadimplenciaQuerySchema,
   pagamentosDetalhadosQuerySchema,
+  aReceberMensalQuerySchema,
 } = require("../validations/analitico");
 
 // helpers
@@ -553,16 +554,23 @@ exports.faturamentoMensal = async (req, res) => {
 // com corte no dia 8 do mês seguinte a cada mês de origem.
 exports.aReceberMensal = async (req, res) => {
   try {
-    const padariaId = getPadariaFromReq(req) || req.usuario?.padaria;
+    // valida query e bloqueia extras
+    const { error: qErr, value: qVal } = aReceberMensalQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    const padariaId =
+      qVal.padaria || getPadariaFromReq(req) || req.usuario?.padaria;
     if (!padariaId) {
       return res.status(400).json({ erro: "Padaria não informada." });
     }
 
-    const { ini, fim, mesStr } = mesRange(req.query.mes); // mês selecionado [ini, fim)
+    const { ini, fim, mesStr } = mesRange(qVal.mes); // mês selecionado [ini, fim)
     const padaria = toObjectIdIfValid(padariaId);
 
     // Data de referência para a regra do dia 8
-    const ref = req.query.ref ? new Date(req.query.ref) : new Date();
+    const ref = qVal.ref ? new Date(qVal.ref) : new Date();
     ref.setHours(0, 0, 0, 0);
 
     // CORTE GLOBAL: primeiro mês com movimento (entrega, pagamento ou avulsa)
