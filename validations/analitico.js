@@ -8,8 +8,11 @@ const objectId = Joi.string().hex().length(24).messages({
   "any.required": "id inválido",
 });
 
+const ym = Joi.string()
+  .pattern(/^\d{4}-(0[1-9]|1[0-2])$/)
+  .message("mes deve ser YYYY-MM");
+
 // GET /analitico/media-produtos-por-entrega
-// Aceita padaria (opcional p/ admin), dataInicio/dataFim ISO; bloqueia extras.
 const mediaProdutosQuerySchema = Joi.object({
   padaria: objectId.optional(),
   dataInicio: Joi.date().iso().optional(),
@@ -22,6 +25,20 @@ const mediaProdutosQuerySchema = Joi.object({
     .optional(),
 }).unknown(false);
 
+// GET /analitico/entregas-por-dia
+// (Contrato atual só aceita padaria opcional via query; bloqueamos extras)
+const entregasPorDiaQuerySchema = Joi.object({
+  padaria: objectId.optional(),
+}).unknown(false);
+
+// GET /analitico/inadimplencia?mes=YYYY-MM&padaria=<id?>
+const inadimplenciaQuerySchema = Joi.object({
+  mes: ym.optional(),
+  padaria: objectId.optional(),
+}).unknown(false);
+
 module.exports = {
   mediaProdutosQuerySchema,
+  entregasPorDiaQuerySchema,
+  inadimplenciaQuerySchema,
 };
