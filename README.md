@@ -1,3 +1,6 @@
+> ⚠️ Este repositório foi movido para monorepo:
+> https://github.com/Luizbragga/Projeto-rotas-de-paes/tree/main/padaria-backend
+
 # Padaria Backend
 
 Este é o backend do sistema de entregas para padarias. Ele gerencia a autenticação, controle de usuários, geração automática de entregas diárias, pagamentos, inadimplência e muito mais.
