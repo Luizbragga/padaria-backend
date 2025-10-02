@@ -9,6 +9,13 @@ const autorizar = require("../middlewares/autorizar");
 const Cliente = require("../models/Cliente");
 const RotaOverride = require("../models/RotaOverride");
 
+const {
+  simularBodySchema,
+  aplicarBodySchema,
+  limparQuerySchema,
+  statusQuerySchema,
+} = require("../validations/rotasSplit");
+
 function dataHojeLocal() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -111,12 +118,17 @@ router.post("/simular", async (req, res) => {
     if (!padariaId)
       return res.status(400).json({ erro: "Padaria não informada" });
 
-    const { rotaAlvo, paraA, paraC, capA, capC } = req.body || {};
+    // valida body e bloqueia campos desconhecidos
+    const { error: bErr, value: bVal } = simularBodySchema.validate(
+      req.body || {}
+    );
+    if (bErr) return res.status(400).json({ erro: bErr.details[0].message });
+
+    const { rotaAlvo, paraA, paraC, capA, capC } = bVal;
+
     const R0 = String(rotaAlvo || "").toUpperCase();
     const RA = String(paraA || "").toUpperCase();
     const RC = String(paraC || "").toUpperCase();
-    if (!R0 || !RA || !RC)
-      return res.status(400).json({ erro: "Informe rotaAlvo, paraA e paraC" });
 
     const padaria = mongoose.Types.ObjectId.isValid(padariaId)
       ? new mongoose.Types.ObjectId(padariaId)
@@ -158,12 +170,17 @@ router.post("/aplicar", async (req, res) => {
     if (!padariaId)
       return res.status(400).json({ erro: "Padaria não informada" });
 
-    const { rotaAlvo, paraA, paraC, capA, capC } = req.body || {};
+    // valida body e bloqueia campos desconhecidos
+    const { error: bErr, value: bVal } = aplicarBodySchema.validate(
+      req.body || {}
+    );
+    if (bErr) return res.status(400).json({ erro: bErr.details[0].message });
+
+    const { rotaAlvo, paraA, paraC, capA, capC } = bVal;
+
     const R0 = String(rotaAlvo || "").toUpperCase();
     const RA = String(paraA || "").toUpperCase();
     const RC = String(paraC || "").toUpperCase();
-    if (!R0 || !RA || !RC)
-      return res.status(400).json({ erro: "Informe rotaAlvo, paraA e paraC" });
 
     const padaria = mongoose.Types.ObjectId.isValid(padariaId)
       ? new mongoose.Types.ObjectId(padariaId)
@@ -229,7 +246,14 @@ router.delete("/limpar", async (req, res) => {
     if (!padariaId)
       return res.status(400).json({ erro: "Padaria não informada" });
 
-    const rota = String(req.query.rota || req.body?.rota || "").toUpperCase();
+    // valida apenas a query (onde preferimos que venha `rota`), sem campos extras
+    const { error: qErr, value: qVal } = limparQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    // manter compatibilidade: se não vier na query, tenta body.rota (sem validar body para não mudar contrato)
+    const rota = String(qVal.rota || req.body?.rota || "").toUpperCase();
     if (!rota) return res.status(400).json({ erro: "Informe a rota alvo" });
 
     const padaria = mongoose.Types.ObjectId.isValid(padariaId)
@@ -255,6 +279,9 @@ router.get("/status", async (req, res) => {
     const padariaId = req.usuario?.padaria || req.query.padaria;
     if (!padariaId)
       return res.status(400).json({ erro: "Padaria não informada" });
+
+    const { error: qErr } = statusQuerySchema.validate(req.query || {});
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
 
     const padaria = mongoose.Types.ObjectId.isValid(padariaId)
       ? new mongoose.Types.ObjectId(padariaId)
