@@ -1,11 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
-
 const autenticar = require("../middlewares/autenticacao");
 const autorizar = require("../middlewares/autorizar");
 const Entrega = require("../models/Entrega");
 const Cliente = require("../models/Cliente");
+const {
+  registrarPagamentoClienteParamsSchema,
+  registrarPagamentoClienteBodySchema,
+} = require("../validations/pagamentos");
 
 /* helpers */
 function mesRange(mesStr) {
@@ -53,10 +56,25 @@ router.post(
   autorizar("admin", "gerente", "atendente"),
   async (req, res) => {
     try {
+      // valida params
+      const { error: paramsError } =
+        registrarPagamentoClienteParamsSchema.validate(req.params);
+      if (paramsError) {
+        return res.status(400).json({ erro: paramsError.details[0].message });
+      }
+
+      // valida body
+      const { error: bodyError, value: validBody } =
+        registrarPagamentoClienteBodySchema.validate(req.body || {});
+      if (bodyError) {
+        return res.status(400).json({ erro: bodyError.details[0].message });
+      }
+
       const padariaId = req.usuario?.padaria;
       const { clienteId } = req.params;
-      let { valor, forma, data, mes } = req.body || {};
+      let { valor, forma, data, mes } = validBody;
 
+      // Mantém a verificação original de valor para não mudar comportamento
       valor = Number(valor);
       if (!Number.isFinite(valor) || valor <= 0) {
         return res.status(400).json({ erro: "Valor inválido." });
