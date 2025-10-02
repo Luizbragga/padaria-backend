@@ -161,6 +161,7 @@ app.use((req, res, next) => {
 // aplicado rate limit **somente** nas rotas sensíveis
 app.use("/api/login", loginLimiter, require("./routes/login"));
 app.use("/api/token", refreshLimiter, require("./routes/tokens"));
+app.use("/health", require("./routes/health"));
 app.use("/api/rotas-split", require("./routes/rotasSplitHoje"));
 app.use("/api/usuarios", require("./routes/usuarios"));
 app.use("/api/padarias", require("./routes/padarias"));
