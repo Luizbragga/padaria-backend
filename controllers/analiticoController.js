@@ -6,7 +6,12 @@ const ConfigPadaria = require("../models/ConfigPadaria");
 const Cliente = require("../models/Cliente");
 const EntregaAvulsa = require("../models/EntregaAvulsa");
 const ClienteAjustePontual = require("../models/ClienteAjustePontual");
-const { mediaProdutosQuerySchema } = require("../validations/analitico");
+
+const {
+  mediaProdutosQuerySchema,
+  entregasPorDiaQuerySchema,
+  inadimplenciaQuerySchema,
+} = require("../validations/analitico");
 
 // helpers
 const toObjectIdIfValid = (v) =>
@@ -177,7 +182,14 @@ function previstoPorClienteNoPeriodoComAjustes(
 // analitico/entregas-por-dia
 exports.entregasPorDia = async (req, res) => {
   try {
-    const padariaId = getPadariaFromReq(req);
+    // valida query e bloqueia extras
+    const { error: qErr, value: qVal } = entregasPorDiaQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    // mantém comportamento: se não vier padaria, agrega geral
+    const padariaId = qVal.padaria || getPadariaFromReq(req);
     const match = {};
     if (padariaId) match.padaria = toObjectIdIfValid(padariaId);
 
@@ -212,11 +224,17 @@ exports.entregasPorDia = async (req, res) => {
 // analitico/inadimplencia
 exports.inadimplencia = async (req, res) => {
   try {
-    const padariaId = getPadariaFromReq(req);
+    // valida query e bloqueia extras (mes opcional YYYY-MM; padaria opcional)
+    const { error: qErr, value: qVal } = inadimplenciaQuerySchema.validate(
+      req.query || {}
+    );
+    if (qErr) return res.status(400).json({ erro: qErr.details[0].message });
+
+    const padariaId = qVal.padaria || getPadariaFromReq(req);
     if (!padariaId) return res.json({ pagantes: 0, inadimplentes: 0 });
 
     // pega início do mês selecionado (ou do mês atual)
-    const { ini } = mesRange(req.query.mes);
+    const { ini } = mesRange(qVal.mes);
 
     // helpers UTC:
     const iniUTC = Date.UTC(
