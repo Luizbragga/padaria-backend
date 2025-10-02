@@ -37,8 +37,28 @@ const inadimplenciaQuerySchema = Joi.object({
   padaria: objectId.optional(),
 }).unknown(false);
 
+// GET /analitico/pagamentos
+// Mantém contrato atual: aceita padaria opcional, dataEspecifica OU (dataInicial+dataFinal), e forma.
+const pagamentosDetalhadosQuerySchema = Joi.object({
+  padaria: objectId.optional(),
+  dataEspecifica: Joi.date().iso().optional(),
+  dataInicial: Joi.date().iso().optional(),
+  dataFinal: Joi.date()
+    .iso()
+    .when("dataInicial", {
+      is: Joi.exist(),
+      then: Joi.date().min(Joi.ref("dataInicial")),
+    })
+    .optional(),
+  // Mantém contrato: "dinheiro" (mapeia p/ "não informado"), "cartao", "mbway", "todas" ou vazio
+  forma: Joi.string()
+    .valid("dinheiro", "cartao", "mbway", "todas", "")
+    .optional(),
+}).unknown(false);
+
 module.exports = {
   mediaProdutosQuerySchema,
   entregasPorDiaQuerySchema,
   inadimplenciaQuerySchema,
+  pagamentosDetalhadosQuerySchema,
 };
